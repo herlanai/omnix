@@ -1,12 +1,7 @@
-// Package presets 提供 Agent Preset（代理预设）接缝。
-//
-// 对齐上游：packages/core/agent-preset
-//
-// 设计要点：
-//   - AgentPreset 描述一组独立的 tools/prompt 组合；不同 preset 挂载到不同 Agent 实例后，
-//     每个 Agent 拥有独立的工具集与系统提示词；
-//   - 注册中心按 standingKey 组织：同一 key 的 preset 组合叠加（composeFrom），
-//     recompose 重建组合、select 按 key 选取。
+// Package presets implements agent presets, matching core/agent-preset.
+// Each preset combines independent tools and prompts for an agent instance.
+// The registry groups presets by standingKey: composeFrom overlays matching
+// presets, recompose rebuilds the combination, and select chooses by key.
 package presets
 
 import (
@@ -16,27 +11,27 @@ import (
 	"github.com/herlanai/omnix/pkg/scope"
 )
 
-// StandingKey 是 preset 的常驻键（如 "code" / "research" / "default"）。
+// StandingKey is a persistent preset key such as code, research, or default.
 type StandingKey string
 
-// AgentPreset 是一个代理预设组合。
+// AgentPreset combines an agent preset's settings.
 type AgentPreset struct {
-	// Key 常驻键。
+	// Key is the standing key.
 	Key StandingKey
-	// Tools 工具名集合（该 preset 可用的工具白名单）。
+	// Tools contains the allowed tool names for this preset.
 	Tools []string
-	// Prompt 系统提示词片段。
+	// Prompt contains a system-prompt fragment.
 	Prompt string
 }
 
-// PresetRegistry 是 Agent Preset 注册中心（基于 scope 分层，host 默认 + 覆盖）。
+// PresetRegistry layers host defaults and scoped overrides for agent presets.
 type PresetRegistry struct {
 	mu        sync.RWMutex
 	hostLayer *scope.Layer[*AgentPreset]
 	layers    *scope.ScopedLayers[*AgentPreset]
 }
 
-// NewPresetRegistry 创建空注册中心。
+// NewPresetRegistry creates an empty registry.
 func NewPresetRegistry() *PresetRegistry {
 	host := scope.NewLayer[*AgentPreset](scope.Key("host"))
 	return &PresetRegistry{
@@ -45,14 +40,14 @@ func NewPresetRegistry() *PresetRegistry {
 	}
 }
 
-// Mount 挂载一个 preset（到 host 层；同名覆盖，其余保留）。
+// Mount installs a host-layer preset, replacing the same name while retaining others.
 func (r *PresetRegistry) Mount(p *AgentPreset) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.hostLayer.Register(string(p.Key), p, 0)
 }
 
-// ComposeFrom 基于多个基础 preset 组合出一个新 preset（工具并集 + prompt 拼接）。
+// ComposeFrom combines base presets using a tool union and concatenated prompts.
 func ComposeFrom(key StandingKey, bases ...*AgentPreset) *AgentPreset {
 	toolSet := map[string]struct{}{}
 	var prompt string
@@ -76,19 +71,19 @@ func ComposeFrom(key StandingKey, bases ...*AgentPreset) *AgentPreset {
 	return &AgentPreset{Key: key, Tools: tools, Prompt: prompt}
 }
 
-// Select 按 key 选取 preset（nearest-scope-wins）。
+// Select resolves a key using nearest-scope-wins.
 func (r *PresetRegistry) Select(key StandingKey) (*AgentPreset, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return r.layers.Get(string(key))
 }
 
-// StandingKeyFor 返回某 Agent 当前应使用的 standing key（简化：直接返回传入 key）。
+// StandingKeyFor returns the agent's standing key; currently it returns the supplied key.
 func StandingKeyFor(key StandingKey) StandingKey {
 	return key
 }
 
-// Recompose 重建注册中心中某 key 的组合（用新 preset 覆盖）。
+// Recompose replaces a key's composition with a new preset.
 func (r *PresetRegistry) Recompose(p *AgentPreset) {
 	r.Mount(p)
 }

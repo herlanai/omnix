@@ -1,12 +1,8 @@
-// Package goal 提供 Goal（目标）系统：状态机 + 续轮驱动 + 6 个 goal_* 工具。
-//
-// 对齐上游：packages/core/goal
-//
-// 设计要点：
-//   - 目标状态经 goal/change 事件持久化（CAS revision 并发保护，单增）；
-//   - RoundDriver 监听 turn-stopping：目标 active 时自动续轮，直到 maxRounds 达上限或完成；
-//   - 6 个工具：goal_list / goal_set_phase / goal_set_description / goal_set_max_rounds /
-//     goal_add_blocker / goal_report_blocker；其中 report_blocker 通过 concludeTurn 结束 turn。
+// Package goal implements goal state, automatic rounds, and six goal_* tools,
+// matching core/goal. State persists as goal/change events with monotonic CAS
+// revisions. RoundDriver continues active goals on turn-stopping until completion
+// or maxRounds. Tools list goals, set phase/description/max rounds, add blockers,
+// and report blockers; reporting a blocker concludes the turn.
 package goal
 
 import (
@@ -16,14 +12,12 @@ import (
 	"github.com/herlanai/omnix/pkg/tools"
 )
 
-// ============================================================================
-// 状态机
-// ============================================================================
+// State machine.
 
-// Phase 是目标阶段。
+// Phase identifies a goal phase.
 type Phase string
 
-// 阶段枚举（对齐官方 packages/goal/goal/src/types.ts 四态）。
+// The four upstream goal phases.
 const (
 	PhaseActive   Phase = "active"
 	PhasePaused   Phase = "paused"
@@ -31,7 +25,7 @@ const (
 	PhaseComplete Phase = "complete"
 )
 
-// Valid 返回该阶段是否为合法的四态之一（官方 GoalPhase）。
+// Valid reports whether the phase is one of the four valid GoalPhase values.
 func (p Phase) Valid() bool {
 	switch p {
 	case PhaseActive, PhasePaused, PhaseBlocked, PhaseComplete:
@@ -41,19 +35,19 @@ func (p Phase) Valid() bool {
 	}
 }
 
-// Goal 是目标运行状态。
+// Goal holds runtime goal state.
 type Goal struct {
-	ID          string            `json:"id"`
-	Phase       Phase             `json:"phase"`
-	Description string            `json:"description"`
-	MaxRounds   int               `json:"maxRounds"`
-	Revision    uint64            `json:"revision"`
-	Blockers    []string          `json:"blockers,omitempty"`
-	// BlockReason 仅在 phase=blocked 时存在（官方 GoalSnapshot.blockedReason）。
-	BlockReason *GoalBlockReason  `json:"blockedReason,omitempty"`
+	ID          string   `json:"id"`
+	Phase       Phase    `json:"phase"`
+	Description string   `json:"description"`
+	MaxRounds   int      `json:"maxRounds"`
+	Revision    uint64   `json:"revision"`
+	Blockers    []string `json:"blockers,omitempty"`
+	// BlockReason exists only for blocked goals, matching GoalSnapshot.blockedReason.
+	BlockReason *GoalBlockReason `json:"blockedReason,omitempty"`
 }
 
-// FromLog 从日志派生最新目标状态（CAS：revision 单增取最新）。
+// FromLog derives the latest goal using monotonically increasing CAS revisions.
 func FromLog(sl *session.SessionLog) (Goal, bool) {
 	fold := session.FoldGoalChange(sl.Events())
 	if !fold.Present {
@@ -66,14 +60,14 @@ func FromLog(sl *session.SessionLog) (Goal, bool) {
 		MaxRounds:   fold.MaxRounds,
 		Revision:    fold.Revision,
 	}
-	// 阻塞原因从持久化事件映射回（R06）。
+	// Restore the block reason from the persisted event (R06).
 	if fold.BlockReason != nil {
 		g.BlockReason = &GoalBlockReason{Code: fold.BlockReason.Code, Message: fold.BlockReason.Message}
 	}
 	return g, true
 }
 
-// toSessionBlockReason 把 goal 域 BlockReason 转成 session 持久化结构。
+// toSessionBlockReason converts a domain reason to its persisted session form.
 func toSessionBlockReason(r *GoalBlockReason) *session.GoalBlockReason {
 	if r == nil {
 		return nil
@@ -81,12 +75,12 @@ func toSessionBlockReason(r *GoalBlockReason) *session.GoalBlockReason {
 	return &session.GoalBlockReason{Code: r.Code, Message: r.Message}
 }
 
-// phaseFrom 转换 fold 阶段。
+// phaseFrom converts a folded phase.
 func phaseFrom(p session.GoalPhase) Phase {
 	return Phase(p)
 }
 
-// writeGoal 写一条 goal/change（CAS revision = 当前 + 1）。
+// writeGoal emits goal/change with the current CAS revision plus one.
 func writeGoal(sl *session.SessionLog, g Goal) error {
 	_, err := sl.Append(session.GoalChangeData{
 		GoalID:      g.ID,
@@ -99,38 +93,34 @@ func writeGoal(sl *session.SessionLog, g Goal) error {
 	return err
 }
 
-// NewGoal 创建一个新目标（revision 从 1 开始）。
+// NewGoal creates a goal starting at revision one.
 func NewGoal(id, desc string, maxRounds int) Goal {
 	return Goal{ID: id, Phase: PhaseActive, Description: desc, MaxRounds: maxRounds, Revision: 1}
 }
 
-// ============================================================================
-// RoundDriver 续轮驱动
-// ============================================================================
+// Round continuation driver.
 
-// RoundDriver 监听 turn-stopping：目标 active 时决定是否续轮。
+// RoundDriver decides whether active goals continue at turn-stopping.
 type RoundDriver struct {
-	// roundCh 续轮信号（供 Agent 循环等待）。
+	// roundCh signals continuation to the agent loop.
 	roundCh chan int
 }
 
-// NewRoundDriver 创建续轮驱动。
+// NewRoundDriver creates a continuation driver.
 func NewRoundDriver() *RoundDriver {
 	return &RoundDriver{roundCh: make(chan int, 1)}
 }
 
-// OnTurnStopping 在 turn 停止时被调用，决定是否启动下一轮。
-// 返回是否需要续轮。
+// OnTurnStopping reports whether another round should start when a turn stops.
 func (d *RoundDriver) OnTurnStopping(sl *session.SessionLog, round int) bool {
 	g, ok := FromLog(sl)
-	// 仅 active 目标自动续轮（官方 goal-round-driver 语义：
-	// paused / blocked / complete 都不继续）。
+	// Only active goals continue automatically; paused, blocked, and complete goals stop.
 	if !ok || g.Phase != PhaseActive {
 		return false
 	}
-	// 轮次未超上限：继续
+	// Continue while below the round limit.
 	if round < g.MaxRounds {
-		// 写 goal/round 事件
+		// Emit goal/round.
 		_, _ = sl.Append(session.GoalRoundData{Round: round + 1})
 		select {
 		case d.roundCh <- round + 1:
@@ -141,7 +131,7 @@ func (d *RoundDriver) OnTurnStopping(sl *session.SessionLog, round int) bool {
 	return false
 }
 
-// WaitRound 阻塞等待下一次续轮信号（超时/取消用 ctx）。
+// WaitRound waits for continuation or context cancellation/timeout.
 func (d *RoundDriver) WaitRound(ctx context.Context) (int, error) {
 	select {
 	case r := <-d.roundCh:
@@ -151,21 +141,19 @@ func (d *RoundDriver) WaitRound(ctx context.Context) (int, error) {
 	}
 }
 
-// ============================================================================
-// 6 个 goal_* 工具
-// ============================================================================
+// The six goal_* tools.
 
-// GoalToolset 是一组 goal 工具。
+// GoalToolset contains goal tools.
 type GoalToolset struct {
 	sl *session.SessionLog
 }
 
-// NewGoalToolset 创建 goal 工具集。
+// NewGoalToolset creates a goal toolset.
 func NewGoalToolset(sl *session.SessionLog) *GoalToolset {
 	return &GoalToolset{sl: sl}
 }
 
-// Tools 返回全部 6 个工具的 *tools.Tool 切片（注册进 M23 pipeline）。
+// Tools returns all six tools for registration in the M23 pipeline.
 func (g *GoalToolset) Tools() []*tools.Tool {
 	return []*tools.Tool{
 		{Name: "goal_list", Execute: g.goalList},
@@ -181,7 +169,7 @@ func (g *GoalToolset) current() (Goal, bool) {
 	return FromLog(g.sl)
 }
 
-// goalList 列出目标状态。
+// goalList lists goal state.
 func (g *GoalToolset) goalList(ctx context.Context, input map[string]any) (any, error) {
 	if cur, ok := g.current(); ok {
 		return map[string]any{"goal": cur}, nil
@@ -189,19 +177,19 @@ func (g *GoalToolset) goalList(ctx context.Context, input map[string]any) (any, 
 	return map[string]any{"goal": nil}, nil
 }
 
-// goalSetPhase 设置阶段。
+// goalSetPhase changes the phase.
 func (g *GoalToolset) goalSetPhase(ctx context.Context, input map[string]any) (any, error) {
 	phase, _ := input["phase"].(string)
 	cur, ok := g.current()
 	if !ok {
 		return nil, NewGoalError(ErrorNotFound, "no active goal", nil)
 	}
-	// 校验非法阶段（官方 GOAL_INVALID_TRANSITION）。
+	// Reject unknown phases with GOAL_INVALID_TRANSITION.
 	target := Phase(phase)
 	if !target.Valid() {
 		return nil, NewGoalError(ErrorInvalidTransition, "invalid phase: "+phase, nil)
 	}
-	// 校验 from→to 迁移合法性（complete 终态、paused/blocked 仅从 active）。
+	// Validate transitions: complete is terminal; only active can become paused or blocked.
 	if !CanTransition(cur.Phase, target) {
 		return nil, NewGoalError(ErrorInvalidTransition,
 			"cannot transition "+string(cur.Phase)+" -> "+phase, nil)
@@ -214,7 +202,7 @@ func (g *GoalToolset) goalSetPhase(ctx context.Context, input map[string]any) (a
 	return map[string]any{"ok": true, "phase": phase}, nil
 }
 
-// goalSetDescription 设置目标描述。
+// goalSetDescription changes the goal description.
 func (g *GoalToolset) goalSetDescription(ctx context.Context, input map[string]any) (any, error) {
 	desc, _ := input["description"].(string)
 	cur, ok := g.current()
@@ -229,14 +217,14 @@ func (g *GoalToolset) goalSetDescription(ctx context.Context, input map[string]a
 	return map[string]any{"ok": true, "description": desc}, nil
 }
 
-// goalSetMaxRounds 设置最大轮次。
+// goalSetMaxRounds changes the round limit.
 func (g *GoalToolset) goalSetMaxRounds(ctx context.Context, input map[string]any) (any, error) {
 	rounds, _ := input["maxRounds"].(float64)
 	cur, ok := g.current()
 	if !ok {
 		return nil, NewGoalError(ErrorNotFound, "no active goal", nil)
 	}
-	// 校验非正数（官方 GOAL_INVALID_MAX_ROUNDS）。
+	// Reject nonpositive limits with GOAL_INVALID_MAX_ROUNDS.
 	if int(rounds) <= 0 {
 		return nil, NewGoalError(ErrorInvalidMaxRounds, "maxRounds must be positive", nil)
 	}
@@ -248,14 +236,14 @@ func (g *GoalToolset) goalSetMaxRounds(ctx context.Context, input map[string]any
 	return map[string]any{"ok": true, "maxRounds": cur.MaxRounds}, nil
 }
 
-// goalAddBlocker 增加阻塞项。
+// goalAddBlocker adds a blocker.
 func (g *GoalToolset) goalAddBlocker(ctx context.Context, input map[string]any) (any, error) {
 	blocker, _ := input["blocker"].(string)
 	cur, ok := g.current()
 	if !ok {
 		return nil, NewGoalError(ErrorNotFound, "no active goal", nil)
 	}
-	// 校验阻塞原因非空（官方 GOAL_INVALID_BLOCK_REASON）。
+	// Require a nonempty block reason (GOAL_INVALID_BLOCK_REASON).
 	if blocker == "" {
 		return nil, NewGoalError(ErrorInvalidBlockReason, "blocker required", nil)
 	}
@@ -267,7 +255,7 @@ func (g *GoalToolset) goalAddBlocker(ctx context.Context, input map[string]any) 
 	return map[string]any{"ok": true, "blockers": cur.Blockers}, nil
 }
 
-// goalReportBlocker 报告阻塞并 concludeTurn 结束 turn。
+// goalReportBlocker reports a blocker and concludes the turn.
 func (g *GoalToolset) goalReportBlocker(ctx context.Context, input map[string]any) (any, error) {
 	blocker, _ := input["blocker"].(string)
 	phase := PhaseBlocked
@@ -278,13 +266,13 @@ func (g *GoalToolset) goalReportBlocker(ctx context.Context, input map[string]an
 	if !ok {
 		return nil, NewGoalError(ErrorNotFound, "no active goal", nil)
 	}
-	// 阻塞必须说明原因（GOAL_INVALID_BLOCK_REASON）。
+	// Blocking requires an explanation (GOAL_INVALID_BLOCK_REASON).
 	if blocker == "" {
 		return nil, NewGoalError(ErrorInvalidBlockReason, "blocker reason required", nil)
 	}
 	cur.Phase = phase
 	cur.Blockers = append(cur.Blockers, blocker)
-	// blocked 时带稳定 BlockReason。
+	// Blocked state carries a stable BlockReason.
 	if phase == PhaseBlocked {
 		cur.BlockReason = &GoalBlockReason{Code: "user-reported", Message: blocker}
 	}
@@ -292,7 +280,7 @@ func (g *GoalToolset) goalReportBlocker(ctx context.Context, input map[string]an
 	if err := writeGoal(g.sl, cur); err != nil {
 		return nil, err
 	}
-	// concludeTurn 结束 turn（Agent 不再进行下一个 Step）
+	// Conclude the turn so the agent does not start another step.
 	if conclude := tools.ConcludeFrom(ctx); conclude != nil {
 		conclude("goal-blocker")
 	}

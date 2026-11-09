@@ -1,10 +1,5 @@
-// Package tests 的 PreToolDecision（M22）验收测试。
-//
-// 覆盖：
-//   - allow / deny / ask 三态在 tools/pre-execute 的接线
-//   - deny → 工具不执行，结果 isError
-//   - ask → 用户仅放行本次调用（allowed-once）：下一次同工具继续 ask，不被永久放行
-//   - 与 M27 approval 决策的协作
+// M22 pre-tool decision tests cover allow/deny/ask wiring, denied calls not executing,
+// one-call-only approval with repeated prompts, and cooperation with M27 approval policy.
 package tests
 
 import (
@@ -17,7 +12,7 @@ import (
 	"github.com/herlanai/omnix/pkg/tools"
 )
 
-// newToolCallRequest 构造一次工具调用请求。
+// newToolCallRequest constructs a tool-call request.
 func newToolCallRequest(callID, tool string, input map[string]any) *tools.ToolCallRequest {
 	return &tools.ToolCallRequest{
 		CallID: brand.NewToolCallID(callID),
@@ -26,7 +21,7 @@ func newToolCallRequest(callID, tool string, input map[string]any) *tools.ToolCa
 	}
 }
 
-// countingAsk 是统计调用次数的 AskFunc；alwaysAllowed 控制是否放行。
+// countingAsk counts prompts and returns the configured alwaysAllowed decision.
 type countingAsk struct {
 	sync.Mutex
 	calls   int
@@ -46,7 +41,7 @@ func (c *countingAsk) count() int {
 	return c.calls
 }
 
-// decisionByTool 根据工具名给出三态决策的 DecisionFunc。
+// decisionByTool selects allow, deny, or ask based on the tool name.
 func decisionByTool(allow map[string]bool, ask map[string]bool) tools.DecisionFunc {
 	return func(req *tools.ToolCallRequest) (tools.PreToolDecision, error) {
 		if ask[req.Tool] {
@@ -59,14 +54,15 @@ func decisionByTool(allow map[string]bool, ask map[string]bool) tools.DecisionFu
 	}
 }
 
-// TestPreToolDecisionAllowDenyAsk 验证三态接线：allow 执行、deny 短路、ask 放行当次。
+// TestPreToolDecisionAllowDenyAsk executes allowed calls, short-circuits denied calls, and grants
+// only the approved call.
 func TestPreToolDecisionAllowDenyAsk(t *testing.T) {
 	tool := &tools.Tool{Name: "test_tool", Execute: func(ctx context.Context, input map[string]any) (any, error) {
 		return "executed", nil
 	}}
 
 	executed := false
-	// 用闭包记录是否真正执行。
+	// Record actual execution through a closure.
 	inner := tool.Execute
 	tool.Execute = func(ctx context.Context, input map[string]any) (any, error) {
 		executed = true
@@ -81,13 +77,13 @@ func TestPreToolDecisionAllowDenyAsk(t *testing.T) {
 	))
 	pipeline.WithTool(tool)
 
-	// allow → 执行成功。
+	// Allow executes successfully.
 	res := pipeline.Run(context.Background(), newToolCallRequest("c-allow", "allow_tool", nil), tool)
 	if res.IsError || res.Value != "executed" {
 		t.Fatalf("allow 应执行成功: %+v", res)
 	}
 
-	// deny → 短路不执行，结果 isError。
+	// Deny skips execution and returns isError.
 	executed = false
 	res = pipeline.Run(context.Background(), newToolCallRequest("c-deny", "deny_tool", nil), tool)
 	if !res.IsError {
@@ -97,7 +93,7 @@ func TestPreToolDecisionAllowDenyAsk(t *testing.T) {
 		t.Fatal("deny 的工具不应被执行")
 	}
 
-	// ask → 用户准许 → 放行本次执行。
+	// User approval permits this requested execution.
 	executed = false
 	res = pipeline.Run(context.Background(), newToolCallRequest("c-ask-1", "ask_tool", nil), tool)
 	if res.IsError || res.Value != "executed" {
@@ -111,7 +107,7 @@ func TestPreToolDecisionAllowDenyAsk(t *testing.T) {
 	}
 }
 
-// TestPreToolDecisionAskOnceNotPermanent 验证 allowed-once：下一次同工具继续 ask，不永久放行。
+// TestPreToolDecisionAskOnceNotPermanent prompts again for later calls to the same tool.
 func TestPreToolDecisionAskOnceNotPermanent(t *testing.T) {
 	tool := &tools.Tool{Name: "t", Execute: func(ctx context.Context, input map[string]any) (any, error) {
 		return "ok", nil
@@ -124,7 +120,7 @@ func TestPreToolDecisionAskOnceNotPermanent(t *testing.T) {
 	))
 	pipeline.WithTool(tool)
 
-	// 两次相同工具调用：每次都触发 ask，绝不做按工具名的永久放行。
+	// Both identical tool calls must prompt; never persist approval by tool name.
 	pipeline.Run(context.Background(), newToolCallRequest("c1", "ask_tool", nil), tool)
 	pipeline.Run(context.Background(), newToolCallRequest("c2", "ask_tool", nil), tool)
 
@@ -133,7 +129,8 @@ func TestPreToolDecisionAskOnceNotPermanent(t *testing.T) {
 	}
 }
 
-// TestPreToolDecisionAskDeniedNotExecutes 验证 ask 被拒 → 短路 deny，工具不执行。
+// TestPreToolDecisionAskDeniedNotExecutes short-circuits rejected prompts without executing the
+// tool.
 func TestPreToolDecisionAskDeniedNotExecutes(t *testing.T) {
 	executed := false
 	tool := &tools.Tool{Name: "t", Execute: func(ctx context.Context, input map[string]any) (any, error) {
@@ -157,9 +154,9 @@ func TestPreToolDecisionAskDeniedNotExecutes(t *testing.T) {
 	}
 }
 
-// TestPreDecisionFromApproval 验证 M22 与 M27 approval 协作（DecisionFromApproval 透传）。
+// TestPreDecisionFromApproval verifies M22/M27 integration through DecisionFromApproval.
 func TestPreDecisionFromApproval(t *testing.T) {
-	// 用一个固定返回 deny 的 approval evaluate 验证透传。
+	// Use an approval evaluator that always denies to verify propagation.
 	evaluate := func(*tools.ToolCallRequest) (approval.Decision, error) {
 		return approval.DecideDeny, nil
 	}
@@ -172,7 +169,7 @@ func TestPreDecisionFromApproval(t *testing.T) {
 	if dec != tools.PreDeny {
 		t.Fatalf("应透传 deny, 实际 %d", dec)
 	}
-	// AskFromApproval: evaluate 返回 allow → true。
+	// AskFromApproval maps an allow decision to true.
 	evaluateAllow := func(*tools.ToolCallRequest) (approval.Decision, error) {
 		return approval.DecideAllow, nil
 	}

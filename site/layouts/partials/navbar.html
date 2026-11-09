@@ -1,10 +1,6 @@
-{{- /* ==========================================================================
-   omnix 站点覆盖：Hextra 主题 navbar.html
-   --------------------------------------------------------------------------
-   与主题原版差异：在导航栏最右侧（汉堡按钮之前）加入语言切换按钮
-   （.omnix-lang-switch），让所有页面都能在右上角一键中英文切换。
-   其余逻辑与主题保持一致，便于跟随上游升级。
-   ========================================================================== */ -}}
+{{- /* omnix override of Hextra's navbar.html.
+ * Add .omnix-lang-switch before the hamburger button to expose English/Chinese
+ * switching on every page. Keep other behavior aligned with the theme. */ -}}
 
 {{- $logoPath := .Site.Params.navbar.logo.path | default "images/logo.svg" -}}
 {{- $logoLink := .Site.Params.navbar.logo.link | default .Site.Home.RelPermalink -}}
@@ -71,11 +67,11 @@
     {{- end -}}
 
 
-    {{- /* omnix 定制：导航栏右侧语言切换（所有页面可用，玻璃拟态下拉）
-         注意：多语言结构下 zh 子页会被绑定到 en 站点，.Language/lang-link 不可靠，
-         这里用 URL 前缀判定当前语言并手动构造切换链接。 */ -}}
+    {{- /* omnix language dropdown for every page. Chinese child pages may belong to the
+ * English site, making .Language and lang-link unreliable. Detect the language
+ * from the URL prefix and construct language links explicitly. */ -}}
     {{- if hugo.IsMultilingual -}}
-      {{- /* 从 URL 前缀推断当前语言 */ -}}
+      {{- /* Infer the language from the URL prefix. */ -}}
       {{- $curLang := "" -}}
       {{- range site.Languages -}}
         {{- if hasPrefix $currentPage.RelPermalink (printf "/%s/" .Lang) -}}
@@ -94,7 +90,7 @@
         <ul class="omnix-lang-dropdown omnix-lang-memory">
           {{- range site.Languages -}}
             {{- $l := . -}}
-            {{- /* 目标语言链接：替换当前页路径的语言前缀；同语言则为当前页 */ -}}
+            {{- /* Replace the language prefix for the target language; retain the path for the current language. */ -}}
             {{- $link := $currentPage.RelPermalink -}}
             {{- if ne $l.Lang $curLang -}}
               {{- $rest := strings.TrimPrefix (printf "/%s" $curLang) $currentPage.RelPermalink -}}
@@ -118,7 +114,7 @@
       </div>
     {{- end -}}
 
-    {{- /* omnix 定制：主题切换按钮（右上角，紧邻语言切换） */ -}}
+    {{- /* omnix theme control next to the top-right language switch. */ -}}
     {{- partial "theme-toggle.html" (dict "hideLabel" true) -}}
 
     <button type="button" aria-label="Menu" class="hamburger-menu -hx-mr-2 hx-rounded hx-p-2 active:hx-bg-gray-400/20 md:hx-hidden">

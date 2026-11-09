@@ -31,10 +31,10 @@ go.work.sum
 # .idea/
 # .vscode/
 
-# 任务表 / 设计文档（docs/）纳入版本控制，确保任务状态可追踪、可提交。
-# 仅忽略运行时生成的报告产物与本地对话历史（不进入版本库）：
-#   - docs/*.html                   运行时生成的 HTML 报告
-#   - docs/trace.md                 本地对话/演进历史（保留本地维护）
+# Track task and design documents in docs/ so task progress is versioned.
+# Ignore only generated reports and local conversation history:
+#   - docs/*.html: generated HTML reports
+#   - docs/trace.md: locally maintained conversation and development history
 # Keep SDK notes visible even when the global gitignore excludes docs.
 !/docs/
 !/docs/SDK_CORE.md
@@ -42,8 +42,8 @@ docs/*.html
 docs/trace.md
 trace.md
 
-# Hugo 文档站（site/）构建产物与本地锁文件
-# site/ 源码（content/hugo.yaml/layouts 等）纳入版本控制
+# Hugo documentation build artifacts and local lock files.
+# Track site sources, including content, hugo.yaml, and layouts.
 site/public/
 site/public-local/
 site/.hugo_build.lock

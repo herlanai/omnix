@@ -1,6 +1,6 @@
-// order_tools.go 复刻官方 system-prompt 的 orderTools：按配置顺序排列工具，
-// 未在配置中列出的工具在 ToolOrderRest 标记处按名称插入；配置必须恰好包含一次
-// rest 标记、不得重复、不得引用不存在的工具名。
+// Tool ordering follows upstream orderTools. Explicit names follow configuration;
+// unlisted names are inserted alphabetically at ToolOrderRest. Configuration must
+// contain exactly one rest marker, no duplicates, and no unknown tool names.
 package sysprompt
 
 import (
@@ -8,10 +8,10 @@ import (
 	"sort"
 )
 
-// ToolOrderRest 是"其余工具"的保留标记。
+// ToolOrderRest is the reserved marker for remaining tools.
 const ToolOrderRest = "<unlisted-tools>"
 
-// OrderTools 按 configured 指定的顺序排列 names。
+// OrderTools orders names according to configured.
 func OrderTools(names, configured []string) ([]string, error) {
 	if configured == nil {
 		out := append([]string(nil), names...)

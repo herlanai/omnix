@@ -1,4 +1,4 @@
-// Package tests 的 attachment 并发限流器验收测试。
+// Attachment concurrency limiter acceptance tests.
 package tests
 
 import (

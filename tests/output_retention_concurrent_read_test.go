@@ -1,7 +1,5 @@
-// 本文件验证任务 S16：Output Retention（canonical value 保留到 committed + 并发读保护）。
-//
-// 覆盖：10MB 大结果并发 reader 各得完整不缺失；读返回独立副本（改写互不影响）；
-// 未保留读取返回 false；逻辑删除语义。
+// S16 retention tests cover complete concurrent reads of a 10 MB canonical value, independent
+// copies, absent reads returning false, and logical deletion before commitment.
 package tests
 
 import (
@@ -14,13 +12,13 @@ import (
 	"github.com/herlanai/omnix/pkg/tools"
 )
 
-// TestOutputRetentionConcurrentReaders 验证并发两个 reader 读同一个 10MB 结果各得完整字节。
+// TestOutputRetentionConcurrentReaders gives two readers complete copies of the same 10 MB result.
 func TestOutputRetentionConcurrentReaders(t *testing.T) {
 	ctx := context.Background()
 	_ = ctx
 	ret := tools.NewResultRetention()
 
-	// 构造 10MB canonical 值（带确定模式便于校验完整性）。
+	// Construct a deterministic 10 MB value for integrity checks.
 	const size = 10 * 1024 * 1024
 	big := make([]byte, size)
 	for i := range big {
@@ -29,7 +27,7 @@ func TestOutputRetentionConcurrentReaders(t *testing.T) {
 	callID := brand.NewToolCallID("tc-big")
 	ret.Retain(callID.Raw(), big)
 
-	// 两个并发 reader。
+	// Start two concurrent readers.
 	var wg sync.WaitGroup
 	results := make([][]byte, 2)
 	for i := 0; i < 2; i++ {
@@ -57,21 +55,21 @@ func TestOutputRetentionConcurrentReaders(t *testing.T) {
 			t.Fatalf("reader[%d] 内容与原始不一致（截断/损坏）", i)
 		}
 	}
-	// 两个 reader 拿到的是独立副本（数组地址不同），改一个不影响另一个。
+	// Readers receive independent backing arrays; modifying one must not affect the other.
 	results[0][0] = ^results[0][0]
 	if results[1][0] == results[0][0] {
 		t.Fatal("两个 reader 应持有独立副本")
 	}
 }
 
-// TestOutputRetentionRetainResult 验证 RetainResult 抽取 canonical 值（含 struct→JSON）。
+// TestOutputRetentionRetainResult extracts canonical values, including JSON-encoded structs.
 func TestOutputRetentionRetainResult(t *testing.T) {
 	ret := tools.NewResultRetention()
 	callID := brand.NewToolCallID("tc-json")
 	res := &tools.ToolCallResult{
-		CallID: callID,
+		CallID:  callID,
 		IsError: false,
-		Value:  map[string]any{"ok": true, "lines": 3},
+		Value:   map[string]any{"ok": true, "lines": 3},
 	}
 	ret.RetainResult(res)
 
@@ -79,13 +77,13 @@ func TestOutputRetentionRetainResult(t *testing.T) {
 	if !ok {
 		t.Fatal("RetainResult 后应可读")
 	}
-	// JSON 序列化应以完整字节保留。
+	// Retain the complete serialized JSON bytes.
 	if !bytes.HasPrefix(got, []byte("{")) || !bytes.Contains(got, []byte(`"lines":3`)) {
 		t.Fatalf("保留值为预期 JSON，实际 %s", got)
 	}
 }
 
-// TestOutputRetentionString 验证 string 值按 []byte 保留。
+// TestOutputRetentionString retains strings as bytes.
 func TestOutputRetentionString(t *testing.T) {
 	ret := tools.NewResultRetention()
 	ret.Retain("tc-str", []byte("beef"))
@@ -95,13 +93,13 @@ func TestOutputRetentionString(t *testing.T) {
 	}
 }
 
-// TestOutputRetentionMissing 验证未保留读取返回 false。
+// TestOutputRetentionMissing returns false for an unretained value.
 func TestOutputRetentionMissing(t *testing.T) {
 	ret := tools.NewResultRetention()
 	if _, ok := ret.Read("nope"); ok {
 		t.Fatal("未保留的 callID 应返回 false")
 	}
-	// 逻辑删除后读取返回 false。
+	// Reads after logical deletion return false.
 	ret.Retain("gone", []byte("x"))
 	ret.Remove("gone")
 	if _, ok := ret.Read("gone"); ok {

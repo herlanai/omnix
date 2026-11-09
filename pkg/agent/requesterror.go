@@ -1,14 +1,9 @@
-// 本文件对应任务 M34：agent/request-error 重试瀑布。
-//
-// 对齐上游：packages/core/agent-loop request-error waterfall
-//
-// 设计要点：
-//   - RequestErrorAction{kind} 只有两种：'retry'（显式重试通道）与 'abort'（终止）；
-//   - request-error waterfall 复用 M02 waterfall 洋葱链：各中间件按序判定动作，可短路；
-//     未命中任何中间件时落到 TerminalRetryDecision 兜底；
-//   - 与 S15（LLM Retry）协同：S15 在 LLM 层做一次退避重试并写 llm/retry 事件；若仍失败
-//     （达 max 上抛），进入本 request-error 瀑布决定 retry 或 abort；
-//   - 超过 max 次重试 → abort，并以 error 关闭当前 turn（写 agent/error 事件）。
+// This file implements the agent/request-error retry waterfall (M34), following
+// upstream agent-loop. Actions are retry or abort. Middleware uses the M02
+// onion chain and may short-circuit; otherwise TerminalRetryDecision handles
+// the error. After S15 exhausts LLM-level backoff retries and llm/retry events,
+// this waterfall decides whether to retry again or abort. Exhausting the retry
+// limit aborts the turn and records agent/error.
 package agent
 
 import (
@@ -19,38 +14,38 @@ import (
 	"github.com/herlanai/omnix/pkg/waterfall"
 )
 
-// RequestErrorActionKind 是 request-error 处理动作类型。
+// RequestErrorActionKind identifies a request-error action.
 type RequestErrorActionKind string
 
-// 动作枚举：仅 retry 与 abort 两种。
+// The only request-error actions are retry and abort.
 const (
 	ActionRetry RequestErrorActionKind = "retry"
 	ActionAbort RequestErrorActionKind = "abort"
 )
 
-// RequestErrorAction 是一次 request-error 的决策结果。
+// RequestErrorAction is the result of handling a request error.
 type RequestErrorAction struct {
-	// Kind 动作类型。
+	// Kind identifies the action.
 	Kind RequestErrorActionKind `json:"kind"`
-	// Reason 决策原因（审计）。
+	// Reason records the decision rationale for auditing.
 	Reason string `json:"reason,omitempty"`
 }
 
-// RequestErrorPayload 是 request-error 瀑布的共享载荷。
+// RequestErrorPayload is shared by request-error middleware.
 type RequestErrorPayload struct {
-	// Err 触发请求错误的底层错误。
+	// Err is the underlying request error.
 	Err error
-	// RetryCount 已发生的重试次数。
+	// RetryCount counts retries already attempted.
 	RetryCount int
-	// MaxRetries 允许的最大重试次数。
+	// MaxRetries limits retry attempts.
 	MaxRetries int
-	// RetryableError 错误是否可重试（overload/rate-limit）。
+	// RetryableError indicates overload or rate-limit errors that may be retried.
 	RetryableError bool
-	// Action 由瀑布写入的最终动作。
+	// Action is the final action selected by the waterfall.
 	Action *RequestErrorAction
 }
 
-// ShouldRetryError 复用 llm 分类：仅 overload / rate-limit 可重试。
+// ShouldRetryError uses LLM classification: only overload and rate-limit qualify.
 func ShouldRetryError(err error) bool {
 	if err == nil {
 		return false
@@ -59,7 +54,7 @@ func ShouldRetryError(err error) bool {
 	return f.Kind == llm.FailOverload || f.Kind == llm.FailRateLimit
 }
 
-// NewRequestErrorPayload 构造载荷并预计算可重试性。
+// NewRequestErrorPayload constructs the payload and computes retryability.
 func NewRequestErrorPayload(err error, retryCount, maxRetries int) *RequestErrorPayload {
 	return &RequestErrorPayload{
 		Err:            err,
@@ -69,8 +64,8 @@ func NewRequestErrorPayload(err error, retryCount, maxRetries int) *RequestError
 	}
 }
 
-// TerminalRetryDecision 是兜底终端决策：
-// 错误可重试且未超过最大次数 → retry；否则 abort（并以 error 关闭 turn）。
+// TerminalRetryDecision retries eligible errors below the retry limit;
+// otherwise it aborts so the turn can close with an error.
 func TerminalRetryDecision(p *RequestErrorPayload) RequestErrorAction {
 	if p.RetryableError && p.RetryCount < p.MaxRetries {
 		return RequestErrorAction{Kind: ActionRetry, Reason: "retryable llm failure within max retries"}
@@ -81,32 +76,30 @@ func TerminalRetryDecision(p *RequestErrorPayload) RequestErrorAction {
 	return RequestErrorAction{Kind: ActionAbort, Reason: "non-retryable request error"}
 }
 
-// RequestErrorWaterfall 是 request-error 处理瀑布（复用 M02 waterfall.Chain）。
-// 中间件可通过写入 p.Action 并短路（不调用 next）终止链。
+// RequestErrorWaterfall handles request errors using the M02 waterfall.Chain.
+// Middleware may set p.Action and stop the chain by not calling next.
 type RequestErrorWaterfall = waterfall.Chain[RequestErrorPayload]
 
-// NewRequestErrorWaterfall 构建 request-error 瀑布链。
+// NewRequestErrorWaterfall constructs the request-error chain.
 func NewRequestErrorWaterfall(handlers ...waterfall.Handler[RequestErrorPayload]) *RequestErrorWaterfall {
 	return waterfall.New(handlers...)
 }
 
-// ResolveRequestError 运行 request-error 瀑布得到最终动作。
-//
-//   - 若某个中间件写入了 p.Action 则直接返回；
-//   - 否则链放行到兜底：应用 TerminalRetryDecision。
+// ResolveRequestError returns the action set by middleware, or applies
+// TerminalRetryDecision when the chain falls through without an action.
 func ResolveRequestError(chain *RequestErrorWaterfall, p *RequestErrorPayload) RequestErrorAction {
 	if chain == nil {
 		return TerminalRetryDecision(p)
 	}
-	_ = chain.Run(context.Background(), p) // 中间件逻辑不含强制 ctx；放行到兜底
+	_ = chain.Run(context.Background(), p) // Middleware does not require a context here; fall through to the terminal decision.
 	if p.Action != nil {
 		return *p.Action
 	}
 	return TerminalRetryDecision(p)
 }
 
-// RecordRequestError 把一次请求错误写入会话日志（agent/error 事件），供审计。
-// log 可为 nil（此时跳过）。
+// RecordRequestError writes agent/error to the session log for auditing.
+// A nil log skips recording.
 func RecordRequestError(log *session.SessionLog, err error) {
 	if log == nil || err == nil {
 		return

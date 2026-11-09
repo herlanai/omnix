@@ -1,11 +1,6 @@
-// 本文件对应任务 H06：Tool Pipeline 对象池（ExecContext / Meta map sync.Pool 回收）。
-//
-// 验证目标：
-//   1. 功能等价：SetPooled(true) 后 Run 与默认 Run 在 pre-deny / execute / post-block /
-//      result 各分支行为一致；
-//   2. 复用安全：多次调用后返回的 *ToolCallResult 相互独立（调用方持有不互相干扰）；
-//   3. 池化命中：开启后应复用（可观测，用reflect或直接通过行为验证）；
-//   4. Benchmark：pooled VS 非 pooled 的 allocs/op 对比（pooled 分配显著减少）。
+// H06 pipeline pooling tests verify branch equivalence for pre-deny, execute, post-block, and
+// result handling; independent returned results; safe context/metadata reuse; and allocation
+// differences between pooled and unpooled execution.
 package tests
 
 import (
@@ -18,11 +13,9 @@ import (
 	"github.com/herlanai/omnix/pkg/waterfall"
 )
 
-// ============================================================================
-// 1. 功能等价：pooled Run 与默认 Run 各分支行为一致
-// ============================================================================
+// 1. Pooled and unpooled Run must preserve branch behavior.
 
-// TestH06PooledPreDeny 验证 pooled 模式下 pre-deny 短路正确。
+// TestH06PooledPreDeny verifies pre-deny short-circuiting with pooling enabled.
 func TestH06PooledPreDeny(t *testing.T) {
 	p := tools.NewPipeline().SetPooled(true).
 		UsePre(func(ec *tools.ExecContext, next waterfall.NextFunc) error {
@@ -49,13 +42,13 @@ func TestH06PooledPreDeny(t *testing.T) {
 	if res.Value != nil {
 		t.Fatal("pooled deny 后不应有值")
 	}
-	// 池化状态查询
+	// Check whether pooling is enabled.
 	if !p.PooledState() {
 		t.Fatal("PooledState 应为 true")
 	}
 }
 
-// TestH06PooledExecuteResult 验证 pooled 模式下正常执行返回正确值。
+// TestH06PooledExecuteResult verifies normal results in pooled mode.
 func TestH06PooledExecuteResult(t *testing.T) {
 	p := tools.NewPipeline().SetPooled(true).WithTool(makeEchoTool())
 	req := &tools.ToolCallRequest{
@@ -76,13 +69,12 @@ func TestH06PooledExecuteResult(t *testing.T) {
 	}
 }
 
-// TestH06PooledResultIndependent 验证多次调用返回的 Result 相互独立（调用方持有的
-// 上一次 result 不会被下一次 Run 改写）。
+// TestH06PooledResultIndependent ensures later runs do not overwrite previously returned results.
 func TestH06PooledResultIndependent(t *testing.T) {
 	p := tools.NewPipeline().SetPooled(true).WithTool(makeEchoTool())
 	ctx := context.Background()
 
-	// 生成一批互不相同的请求，手动调用独立 Result 指针。
+	// Issue distinct requests and retain their result pointers.
 	results := make([]*tools.ToolCallResult, 0, 5)
 	for i := 0; i < 5; i++ {
 		req := &tools.ToolCallRequest{
@@ -92,7 +84,7 @@ func TestH06PooledResultIndependent(t *testing.T) {
 		}
 		results = append(results, p.Run(ctx, req, nil))
 	}
-	// 每个结果都应保留其各自的 CallID（若结果被池化改写，这些会互相污染）。
+	// Each result must retain its own CallID rather than being overwritten by pool reuse.
 	for i, r := range results {
 		if r.CallID.Raw() != "ind-"+itoa(i) {
 			t.Fatalf("第 %d 个结果 CallID 被污染: %s", i, r.CallID.Raw())
@@ -104,9 +96,10 @@ func TestH06PooledResultIndependent(t *testing.T) {
 	}
 }
 
-// TestH06PooledMetaIsolation 验证 pooled 复用 ExecContext 后 Meta map 被正确清空（不串味）。
+// TestH06PooledMetaIsolation verifies reused ExecContext metadata is cleared between calls.
 func TestH06PooledMetaIsolation(t *testing.T) {
-	// pre 级断言：每次进入本轮的 Meta 应为空（上一轮 post 污染必须已被 clearMeta 清掉）。
+	// At pre-execution, Meta must be empty; clearMeta must remove the previous run's post-execution
+	// mutations.
 	p := tools.NewPipeline().SetPooled(true).
 		UseExecute(func(ec *tools.ExecContext, next waterfall.NextFunc) error {
 			if len(ec.Meta) != 0 {
@@ -115,7 +108,7 @@ func TestH06PooledMetaIsolation(t *testing.T) {
 			return next()
 		}).
 		UsePost(func(ec *tools.ExecContext, next waterfall.NextFunc) error {
-			// 每轮往 Meta 里塞一个 tag。
+			// Add a tag to Meta on every run.
 			ec.Meta["tag"] = ec.Request.Input["tag"]
 			return next()
 		}).
@@ -132,11 +125,9 @@ func TestH06PooledMetaIsolation(t *testing.T) {
 	}
 }
 
-// ============================================================================
-// 2. Benchmark：pooled VS 非 pooled —— allocs / op 对比
-// ============================================================================
+// 2. Compare allocations per operation with and without pooling.
 
-// BenchmarkH06RunUnPooled 默认路径基线。
+// BenchmarkH06RunUnPooled measures the default path.
 func BenchmarkH06RunUnPooled(b *testing.B) {
 	p := tools.NewPipeline().WithTool(makeEchoTool())
 	ctx := context.Background()
@@ -150,7 +141,7 @@ func BenchmarkH06RunUnPooled(b *testing.B) {
 	}
 }
 
-// BenchmarkH06RunPooled H06 池化路径。
+// BenchmarkH06RunPooled measures the H06 pooled path.
 func BenchmarkH06RunPooled(b *testing.B) {
 	p := tools.NewPipeline().SetPooled(true).WithTool(makeEchoTool())
 	ctx := context.Background()

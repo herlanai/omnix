@@ -1,112 +1,99 @@
-// Package agent 的配置与运行时类型。
-//
-// 对齐官方 packages/core/agent/src/runtime-types.ts 和 types.ts。
+// Agent configuration and runtime types follow upstream
+// packages/core/agent/src/runtime-types.ts and types.ts.
 package agent
 
 import (
 	"time"
 )
 
-// AgentOptions 是 Agent 的创建配置（对齐官方 AgentOptions）。
-//
-// 这些选项在 Agent 创建时固定，运行时不可变。Persona 属于 system-prompt
-// 部分，不在此配置中。
+// AgentOptions configures agent creation, matching upstream AgentOptions.
+// Options are fixed at creation and immutable at runtime. Persona belongs to
+// the system prompt and is not configured here.
 type AgentOptions struct {
-	// Provider 路由名称（调用时必须有已注册的适配器）。
-	// 为空时使用适配器的默认 provider。
+	// Provider names a registered adapter route; empty uses the adapter default.
 	Provider string `json:"provider,omitempty"`
 
-	// Model 是由选定 provider 适配器解释的模型 ID。
-	// 为空时使用适配器的默认模型。
+	// Model is interpreted by the selected provider; empty uses its default model.
 	Model string `json:"model,omitempty"`
 
-	// ReasoningEffort 是适配器拥有的推理努力级别（provider/model 相关）。
-	// 为空时使用适配器的默认设置。
+	// ReasoningEffort is provider/model-specific; empty uses adapter defaults.
 	ReasoningEffort string `json:"reasoningEffort,omitempty"`
 
-	// MaxTokens 是每次对话模型请求的最大输出 token 数。
-	// 为 0 时使用适配器的默认限制。
+	// MaxTokens limits output tokens per model request; zero uses the adapter default.
 	MaxTokens int `json:"maxTokens,omitempty"`
 
-	// DefaultTimeout 是每次运行的默认超时（0 表示无超时）。
+	// DefaultTimeout is the per-run timeout; zero disables the timeout.
 	DefaultTimeout time.Duration `json:"defaultTimeout,omitempty"`
 }
 
-// AgentStatus 是 Agent 的生命周期状态（对齐官方 AgentStatus）。
-//
-// 在每次状态转换时通过 agent/status 事件发出：
-//   - idle：没有驱动程序活动
-//   - running：当唤醒输入开始可取消的 pre-step 处理时开始，
-//     持续到驱动程序耗尽、关闭或检查点 turns
-//
-// Disposal 将 Agent 从其注册表中移除；它不是第三个可观察状态。
+// AgentStatus describes agent lifecycle state, matching upstream AgentStatus.
+// Transitions emit agent/status. Idle means no active driver. Running begins
+// when wake-up input starts cancellable pre-step processing and lasts until
+// the driver drains, closes, or checkpoints turns. Disposal removes the agent
+// from its registry; it is not a third observable state.
 type AgentStatus string
 
 const (
-	// StatusIdle 表示 Agent 当前空闲（没有活动的驱动程序）。
+	// StatusIdle indicates no active driver.
 	StatusIdle AgentStatus = "idle"
-	// StatusRunning 表示 Agent 正在运行（有活动的驱动程序）。
+	// StatusRunning indicates an active driver.
 	StatusRunning AgentStatus = "running"
 )
 
-// CancelOptions 是取消选项（对齐官方 CancelOptions）。
+// CancelOptions configures cancellation, matching upstream CancelOptions.
 type CancelOptions struct {
-	// KeepInbox 保留排队和引导中的 inbox 项，而不是丢弃它们。
-	// 活动的 turn 仍然被中止，但未开始和待处理的工作会保留供后续 turn 使用，
-	// 并且不会记录 canceled inbox splice。
+	// KeepInbox preserves queued and steering input instead of discarding it.
+	// The active turn still aborts, but pending work remains for later turns
+	// and no canceled inbox splice is recorded.
 	KeepInbox bool `json:"keepInbox,omitempty"`
 }
 
-// PreStepDecision 是循环是否以及携带哪些消息进入提议的 step
-// （对齐官方 PreStepDecision）。
+// PreStepDecision determines whether to enter a proposed step and which
+// messages it receives, matching upstream PreStepDecision.
 type PreStepDecision struct {
-	// Kind 是决策类型："reject" 或 "enter"。
+	// Kind is either reject or enter.
 	Kind string `json:"kind"`
-	// Messages 是进入 step 时携带的用户消息（Kind=enter 时有效）。
+	// Messages contains admitted user input when Kind is enter.
 	Messages []UserMessage `json:"messages,omitempty"`
-	// StartsRequestSeries 表示在此 step 的已接纳消息之前启动一个不同的
-	// model-message 系列（Kind=enter 时可选）。
+	// StartsRequestSeries optionally starts a distinct model-message series
+	// before the admitted input when Kind is enter.
 	StartsRequestSeries bool `json:"startsRequestSeries,omitempty"`
 }
 
-// RejectPreStep 创建一个 reject 决策（不进入 step）。
+// RejectPreStep creates a decision that does not enter the step.
 func RejectPreStep() PreStepDecision {
 	return PreStepDecision{Kind: "reject"}
 }
 
-// EnterPreStep 创建一个 enter 决策（携带指定消息进入 step）。
+// EnterPreStep creates a decision admitting the supplied messages.
 func EnterPreStep(messages ...UserMessage) PreStepDecision {
 	return PreStepDecision{Kind: "enter", Messages: messages}
 }
 
-// SessionStartSource 是会话生命周期开始的原因
-// （对齐官方 SessionStartSource）。
-//
-//   - startup：种子创建
-//   - resume：持久化加载
-//   - clear：清除后重新开始
-//   - compact：压缩后重新开始
+// SessionStartSource identifies why a session lifecycle starts:
+// startup creates a seed, resume loads persistence, clear restarts after
+// clearing, and compact restarts after compaction.
 type SessionStartSource string
 
 const (
-	// StartSourceStartup 表示种子创建。
+	// StartSourceStartup indicates seed creation.
 	StartSourceStartup SessionStartSource = "startup"
-	// StartSourceResume 表示持久化加载。
+	// StartSourceResume indicates loading persisted state.
 	StartSourceResume SessionStartSource = "resume"
-	// StartSourceClear 表示清除后重新开始。
+	// StartSourceClear indicates restarting after clearing.
 	StartSourceClear SessionStartSource = "clear"
-	// StartSourceCompact 表示压缩后重新开始。
+	// StartSourceCompact indicates restarting after compaction.
 	StartSourceCompact SessionStartSource = "compact"
 )
 
-// UserMessage 是用户消息（简化版，对齐官方 UserMessage）。
+// UserMessage is a simplified representation of upstream UserMessage.
 type UserMessage struct {
-	// ID 是消息 ID。
+	// ID identifies the message.
 	ID string `json:"id"`
-	// Content 是消息内容。
+	// Content contains the message text.
 	Content string `json:"content"`
-	// Source 是消息来源（"run" / "followup" / "inbox" 等）。
+	// Source identifies the origin, such as run, followup, or inbox.
 	Source string `json:"source,omitempty"`
-	// CreatedAt 是创建时间。
+	// CreatedAt records creation time.
 	CreatedAt time.Time `json:"createdAt,omitempty"`
 }

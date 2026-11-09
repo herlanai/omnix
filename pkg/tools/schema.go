@@ -1,16 +1,8 @@
-// Package tools 提供工具定义与执行的通用接缝。
-//
-// 本文件对应任务 M48：DefineTool JSON Schema 强校验子集。
-//
-// 对齐上游：packages/core/tools DefineTool Schema
-//
-// 设计动机：
-//   - Agent 的工具调用参数、subagent / workflow 的结构化输出都需要一套严格的 JSON Schema
-//     校验子集，保证 LLM 生成的参数在进入 execute 前就被验证；
-//   - 与原版 1:1 对齐的关键语义：oneOf / additionalProperties=false / items / enum /
-//     const / default / examples / number·string·array 约束；
-//   - 不支持的 schema 关键字必须在 define 时报错（fail-closed），而不是静默忽略，
-//     否则模型侧与执行侧会对参数语义产生不一致理解。
+// Package tools defines tools and their execution pipeline. Its JSON Schema subset (M48)
+// validates tool arguments and structured subagent/workflow output before execution. It supports
+// oneOf, closed objects, items, enum, const, defaults, examples, and numeric/string/array
+// constraints. Unsupported keywords fail at definition time rather than silently giving the
+// model and executor different contracts.
 package tools
 
 import (
@@ -23,10 +15,10 @@ import (
 	"strings"
 )
 
-// SchemaType 是 JSON Schema 支持的类型名。
+// SchemaType names a supported JSON Schema type.
 type SchemaType string
 
-// 支持的 JSON Schema 类型枚举。
+// Supported JSON Schema types.
 const (
 	TypeString  SchemaType = "string"
 	TypeNumber  SchemaType = "number"
@@ -37,62 +29,61 @@ const (
 	TypeNull    SchemaType = "null"
 )
 
-// JsonSchemaNode 是 DefineTool 支持的 JSON Schema 强校验子集。
-// 字段与上游 packages/core/tools 的 DefineTool Schema 1:1 对应。
+// JsonSchemaNode represents the validated DefineTool schema subset, aligned with the upstream
+// tool-definition fields.
 type JsonSchemaNode struct {
-	// Type 声明节点类型。
+	// Type declares the node's value type.
 	Type SchemaType `json:"type,omitempty"`
 
-	// Description 提供给模型阅读的字段说明。
+	// Description explains the field to the model.
 	Description string `json:"description,omitempty"`
 
-	// Properties 仅 object 使用：属性名 → 子 schema。
+	// Properties maps object property names to child schemas.
 	Properties map[string]*JsonSchemaNode `json:"properties,omitempty"`
 
-	// Required 仅 object 使用：必填属性名列表。
+	// Required lists mandatory object properties.
 	Required []string `json:"required,omitempty"`
 
-	// AdditionalProperties 仅 object 使用：
-	//   - nil：允许任意额外属性（默认）；
-	//   - false：拒绝任何未声明的属性（严格模式，与原版语义一致）。
+	// AdditionalProperties controls undeclared object fields. Nil allows them by default; false
+	// rejects them in strict mode.
 	AdditionalProperties *bool `json:"additionalProperties,omitempty"`
 
-	// Items 仅 array 使用：元素子 schema。
+	// Items specifies the array-element schema.
 	Items *JsonSchemaNode `json:"items,omitempty"`
 
-	// Enum 限制取值必须属于该列表（与 const 互斥，若都设置则 Enum 优先）。
+	// Enum restricts values to this list and takes precedence over Const when both are set.
 	Enum []any `json:"enum,omitempty"`
 
-	// Const 限制取值必须严格等于该常量。
+	// Const restricts the value to an exact constant.
 	Const any `json:"const,omitempty"`
 
-	// Default 提供模型可参考的默认值（不参与校验）。
+	// Default suggests a value to the model without affecting validation.
 	Default any `json:"default,omitempty"`
 
-	// Examples 提供模型可参考的示例（不参与校验）。
+	// Examples provides model-facing examples without affecting validation.
 	Examples []any `json:"examples,omitempty"`
 
-	// OneOf 允许值匹配其中任一子 schema。
+	// OneOf accepts a value matching any child schema in this subset.
 	OneOf []*JsonSchemaNode `json:"oneOf,omitempty"`
 
-	// --- number/integer 约束 ---
+	// Number and integer constraints.
 	Minimum          *float64 `json:"minimum,omitempty"`
 	Maximum          *float64 `json:"maximum,omitempty"`
 	ExclusiveMinimum *bool    `json:"exclusiveMinimum,omitempty"`
 	ExclusiveMaximum *bool    `json:"exclusiveMaximum,omitempty"`
 
-	// --- string 约束 ---
+	// String constraints.
 	MinLength *int   `json:"minLength,omitempty"`
 	MaxLength *int   `json:"maxLength,omitempty"`
 	Pattern   string `json:"pattern,omitempty"`
 
-	// --- array 约束 ---
+	// Array constraints.
 	MinItems *int `json:"minItems,omitempty"`
 	MaxItems *int `json:"maxItems,omitempty"`
 }
 
-// supportedKeys 是 Compile 允许出现的 JSON Schema 关键字集合。
-// 任何其它关键字（如 $ref / allOf / anyOf / not / format / nullable 等）一律拒绝。
+// supportedKeys lists keywords accepted by Compile. Others, including $ref, allOf, anyOf, not,
+// format, and nullable, are rejected.
 var supportedKeys = map[string]struct{}{
 	"type": {}, "description": {}, "properties": {}, "required": {},
 	"additionalProperties": {}, "items": {}, "enum": {}, "const": {},
@@ -102,8 +93,8 @@ var supportedKeys = map[string]struct{}{
 	"minItems": {}, "maxItems": {},
 }
 
-// Compile 从 JSON 字节解析 JsonSchemaNode，并拒绝不支持的 schema 关键字。
-// 这是 define 工具时的唯一入口，保证 fail-closed：遇到未知关键字直接报错。
+// Compile parses a schema and rejects unsupported keywords. Use it when defining tools so
+// unknown constraints fail closed.
 func Compile(raw []byte) (*JsonSchemaNode, error) {
 	dec := json.NewDecoder(strings.NewReader(string(raw)))
 	dec.DisallowUnknownFields()
@@ -112,19 +103,18 @@ func Compile(raw []byte) (*JsonSchemaNode, error) {
 	if err := dec.Decode(&node); err != nil {
 		return nil, fmt.Errorf("schema: compile failed: %w", err)
 	}
-	// DisallowUnknownFields 对嵌套 map 不起作用，需手动递归校验未知 key
+	// DisallowUnknownFields does not validate nested maps; recursively check schema keys instead.
 	if err := validateSupportedKeys(raw); err != nil {
 		return nil, err
 	}
-	// 语义自检：type 为 object 时必须带 properties；oneOf 至少 1 项等
+	// Validate schema structure, including object properties and nonempty oneOf branches.
 	if err := node.assertStructural(); err != nil {
 		return nil, err
 	}
 	return &node, nil
 }
 
-// validateSupportedKeys 递归扫描原始 JSON，找出所有出现在对象里的 key，
-// 若不在 supportedKeys 集合中则报错。
+// validateSupportedKeys recursively rejects schema keywords outside supportedKeys.
 func validateSupportedKeys(raw []byte) error {
 	var root any
 	if err := json.Unmarshal(raw, &root); err != nil {
@@ -139,8 +129,8 @@ func validateSupportedKeys(raw []byte) error {
 					return fmt.Errorf("schema: unsupported keyword %q (fail-closed, 不支持该关键字)", k)
 				}
 				if k == "properties" {
-					// properties 的值是 map[属性名]schema：键名是属性名而非关键字，
-					// 只递归校验每个属性子 schema。
+					// Properties contains user-defined names rather than schema keywords; validate each property's
+					// child schema instead.
 					if props, ok := sub.(map[string]any); ok {
 						for _, subSchema := range props {
 							if err := walk(subSchema); err != nil {
@@ -166,7 +156,7 @@ func validateSupportedKeys(raw []byte) error {
 	return walk(root)
 }
 
-// assertStructural 检查 schema 内部结构合法性。
+// assertStructural validates the schema's internal structure.
 func (n *JsonSchemaNode) assertStructural() error {
 	if n.OneOf != nil && len(n.OneOf) == 0 {
 		return fmt.Errorf("schema: oneOf must contain at least one subschema")
@@ -185,9 +175,9 @@ func (n *JsonSchemaNode) assertStructural() error {
 	return nil
 }
 
-// Validate 校验一个 Go 值是否符合该 schema。返回 nil 表示通过。
+// Validate returns nil when a Go value satisfies the schema.
 func (n *JsonSchemaNode) Validate(v any) error {
-	// oneOf：任一子 schema 匹配即通过
+	// This subset accepts oneOf when any child schema matches.
 	if len(n.OneOf) > 0 {
 		var matched int
 		for _, sub := range n.OneOf {
@@ -201,7 +191,7 @@ func (n *JsonSchemaNode) Validate(v any) error {
 		return nil
 	}
 
-	// enum：值必须属于枚举列表
+	// Require the value to appear in Enum.
 	if len(n.Enum) > 0 {
 		for _, e := range n.Enum {
 			if reflect.DeepEqual(e, v) {
@@ -210,7 +200,7 @@ func (n *JsonSchemaNode) Validate(v any) error {
 		}
 		return fmt.Errorf("schema: value %v not in enum %v", v, n.Enum)
 	}
-	// const：值必须严格相等
+	// Require exact equality with Const.
 	if n.Const != nil {
 		if !reflect.DeepEqual(n.Const, v) {
 			return fmt.Errorf("schema: value %v != const %v", v, n.Const)
@@ -221,11 +211,11 @@ func (n *JsonSchemaNode) Validate(v any) error {
 	return n.validateTyped(v)
 }
 
-// validateTyped 执行类型与约束校验。
+// validateTyped checks value types and their constraints.
 func (n *JsonSchemaNode) validateTyped(v any) error {
 	switch n.Type {
 	case "":
-		// 未声明 type：仅做 enum/const/oneOf 约束校验（已在上层处理）
+		// Without a declared type, only the enum, const, and oneOf constraints above apply.
 		return nil
 	case TypeNull:
 		if v != nil {
@@ -288,7 +278,7 @@ func (n *JsonSchemaNode) validateTyped(v any) error {
 	case TypeArray:
 		arr, ok := v.([]any)
 		if !ok {
-			// 兼容原生切片（测试直接传 []int 等）
+			// Accept native slices, such as []int passed directly by tests.
 			rv := reflect.ValueOf(v)
 			if rv.Kind() != reflect.Slice && rv.Kind() != reflect.Array {
 				return fmt.Errorf("schema: expected array, got %T", v)
@@ -315,19 +305,19 @@ func (n *JsonSchemaNode) validateTyped(v any) error {
 	case TypeObject:
 		obj, ok := v.(map[string]any)
 		if !ok {
-			// 兼容结构体：反射转 map 后再校验
+			// Convert structs to maps for validation.
 			obj = structToMap(v)
 			if obj == nil {
 				return fmt.Errorf("schema: expected object, got %T", v)
 			}
 		}
-		// 必填检查
+		// Check required properties.
 		for _, name := range n.Required {
 			if _, exists := obj[name]; !exists {
 				return fmt.Errorf("schema: missing required property %q", name)
 			}
 		}
-		// 严格模式：拒绝未声明属性
+		// Reject undeclared properties in strict mode.
 		if n.AdditionalProperties != nil && !*n.AdditionalProperties {
 			for key := range obj {
 				if _, declared := n.Properties[key]; !declared {
@@ -335,7 +325,7 @@ func (n *JsonSchemaNode) validateTyped(v any) error {
 				}
 			}
 		}
-		// 逐属性校验
+		// Validate each declared property.
 		for key, sub := range n.Properties {
 			if val, exists := obj[key]; exists {
 				if err := sub.Validate(val); err != nil {
@@ -349,7 +339,7 @@ func (n *JsonSchemaNode) validateTyped(v any) error {
 	}
 }
 
-// toFloat 将任意数值类型转为 float64。
+// toFloat converts numeric values to float64.
 func toFloat(v any) (float64, bool) {
 	switch t := v.(type) {
 	case float64:
@@ -370,7 +360,7 @@ func toFloat(v any) (float64, bool) {
 	}
 }
 
-// structToMap 将结构体反射为 map[string]any，用于校验直接传入结构体的情况。
+// structToMap converts structs to map[string]any for direct-value validation.
 func structToMap(v any) map[string]any {
 	rv := reflect.ValueOf(v)
 	if rv.Kind() == reflect.Ptr {
@@ -394,8 +384,8 @@ func structToMap(v any) map[string]any {
 	return out
 }
 
-// Infer 从任意 Go 值推断 JsonSchemaNode（对应上游 DefineTool 的 INFER 能力）。
-// 支持基础类型 / 切片 / map / 结构体。无法推断的类型返回错误。
+// Infer derives a schema from primitive values, slices, maps, and structs, matching the upstream
+// INFER capability. Unsupported types return an error.
 func Infer(v any) (*JsonSchemaNode, error) {
 	node, err := infer(reflect.ValueOf(v), 0)
 	if err != nil {
@@ -404,7 +394,7 @@ func Infer(v any) (*JsonSchemaNode, error) {
 	return node, nil
 }
 
-// infer 递归推断 schema，depth 用于防止循环引用。
+// infer recursively derives schemas; depth limits recursive references.
 func infer(rv reflect.Value, depth int) (*JsonSchemaNode, error) {
 	if depth > 32 {
 		return nil, fmt.Errorf("schema: inference depth exceeded (possible recursive type)")
@@ -430,8 +420,8 @@ func infer(rv reflect.Value, depth int) (*JsonSchemaNode, error) {
 	case reflect.Float32, reflect.Float64:
 		return &JsonSchemaNode{Type: TypeNumber}, nil
 	case reflect.Slice, reflect.Array:
-		// 优先从元素类型推断（即使切片为空也能得到正确的元素 schema），
-		// 其次回退到首个元素值。
+		// Prefer the element type, which also works for empty slices; otherwise inspect the first
+		// element.
 		items := &JsonSchemaNode{Type: TypeNull}
 		if rv.Kind() == reflect.Array && rv.Len() > 0 {
 			it, err := infer(rv.Index(0), depth+1)
@@ -500,14 +490,15 @@ func infer(rv reflect.Value, depth int) (*JsonSchemaNode, error) {
 	}
 }
 
-// Marshal 输出标准 JSON Schema 文本（properties/required/enum 均按字典序，保证确定性）。
+// Marshal produces deterministic JSON Schema with ordered properties, required fields, and enum
+// values.
 func (n *JsonSchemaNode) Marshal() ([]byte, error) {
-	// 深度复制并排序 map 键，保证输出确定性
+	// Copy nested data and sort keys for deterministic output.
 	ordered := n.orderMap()
 	return json.MarshalIndent(ordered, "", "  ")
 }
 
-// orderMap 将内部结构转为 map 并按 properties/required/enum 排序后序列化。
+// orderMap builds the representation used for deterministic schema serialization.
 func (n *JsonSchemaNode) orderMap() map[string]any {
 	out := map[string]any{}
 	if n.Type != "" {

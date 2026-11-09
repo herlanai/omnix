@@ -1,10 +1,5 @@
-// Package tests 的工具限制（M24）验收测试。
-//
-// 覆盖：
-//   - host 层 deny + scope 层 exempt → 工具恢复可用
-//   - 两层相交（host deny + scope deny）→ 拒绝
-//   - nearest-scope-wins：最近层优先
-//   - Filter 应用于 Preset 隐藏工具 / Subagent 限制子能力
+// M24 restriction tests cover host denial overridden by scope exemption, combined denials,
+// nearest-scope precedence, and filtering for presets and subagent capabilities.
 package tests
 
 import (
@@ -14,19 +9,19 @@ import (
 	"github.com/herlanai/omnix/pkg/tools"
 )
 
-// mkTool 构造一个可执行工具定义。
+// mkTool constructs an executable tool definition.
 func mkTool(name string) *tools.Tool {
 	return &tools.Tool{Name: name, Execute: func(ctx context.Context, input map[string]any) (any, error) {
 		return "ok", nil
 	}}
 }
 
-// TestToolRestrictionHostDenyScopeExempt 验证 host deny + scope exempt → 工具恢复可用。
+// TestToolRestrictionHostDenyScopeExempt restores a tool through a scope exemption.
 func TestToolRestrictionHostDenyScopeExempt(t *testing.T) {
 	rs := tools.NewRestrictionSet()
-	// host 层 deny bash/rm。
+	// Deny bash and rm at host level.
 	rs.Host(tools.RestrictionDeny("bash", "rm"))
-	// scope 层 exempt rm。
+	// Exempt rm at scope level.
 	rs.Scope("session:main", tools.RestrictionAllow("rm"))
 
 	if !rs.Allowed("rm") {
@@ -40,11 +35,11 @@ func TestToolRestrictionHostDenyScopeExempt(t *testing.T) {
 	}
 }
 
-// TestToolRestrictionIntersect 验证两层相交（host deny + scope deny）→ 拒绝。
+// TestToolRestrictionIntersect preserves denial across both layers.
 func TestToolRestrictionIntersect(t *testing.T) {
 	rs := tools.NewRestrictionSet()
 	rs.Host(tools.RestrictionDeny("rm", "bash"))
-	rs.Scope("session:child", tools.RestrictionDeny("bash")) // 父限子：子层也 deny bash
+	rs.Scope("session:child", tools.RestrictionDeny("bash")) // The child layer also denies bash.
 
 	if rs.Allowed("bash") {
 		t.Fatal("两层均 deny bash, 应拒绝")
@@ -54,22 +49,22 @@ func TestToolRestrictionIntersect(t *testing.T) {
 	}
 }
 
-// TestToolRestrictionNearestScopeWins 验证最近层优先（子层重新拒绝父层放行的工具）。
+// TestToolRestrictionNearestScopeWins lets a nearer child scope deny a parent-allowed tool.
 func TestToolRestrictionNearestScopeWins(t *testing.T) {
 	rs := tools.NewRestrictionSet()
-	rs.Host(tools.RestrictionAllow("web_fetch")) // host 放行
-	rs.Scope("session:a", tools.RestrictionDeny("web_fetch")) // 会话层拒绝
+	rs.Host(tools.RestrictionAllow("web_fetch"))              // Allow at host level.
+	rs.Scope("session:a", tools.RestrictionDeny("web_fetch")) // Deny at session level.
 
 	if rs.Allowed("web_fetch") {
 		t.Fatal("最近会话层 deny 应覆盖 host allow")
 	}
 }
 
-// TestToolRestrictionFilterHideForPreset 验证 Filter 用于 Preset 隐藏工具。
+// TestToolRestrictionFilterHideForPreset filters tools hidden by a preset.
 func TestToolRestrictionFilterHideForPreset(t *testing.T) {
 	defs := []*tools.Tool{mkTool("bash"), mkTool("rm"), mkTool("ls"), mkTool("goal_list")}
 	rs := tools.NewRestrictionSet()
-	rs.Host(tools.RestrictionDeny("bash", "rm")) // 预设隐藏危险工具
+	rs.Host(tools.RestrictionDeny("bash", "rm")) // Hide dangerous tools in the preset.
 
 	kept := rs.Filter(defs)
 	if len(kept) != 2 {
@@ -80,13 +75,13 @@ func TestToolRestrictionFilterHideForPreset(t *testing.T) {
 	}
 }
 
-// TestToolRestrictionSubagentParentLimitsChild 验证父限子能力（Subagent 场景）。
+// TestToolRestrictionSubagentParentLimitsChild verifies parent-imposed child capabilities.
 func TestToolRestrictionSubagentParentLimitsChild(t *testing.T) {
 	defs := []*tools.Tool{mkTool("bash"), mkTool("fs_edit"), mkTool("goal_list")}
-	// 父代理：子代理默认无 bash/fs_edit。
+	// The parent excludes bash and fs_edit from the child's defaults.
 	rs := tools.NewRestrictionSet()
 	rs.Host(tools.RestrictionDeny("bash", "fs_edit"))
-	// 子代理在更近层只放行 goal_list（父限子）。
+	// The child explicitly permits only goal_list in its nearer scope.
 	rs.Scope("subagent:child", tools.RestrictionAllow("goal_list"))
 
 	kept := rs.Filter(defs)
@@ -95,7 +90,7 @@ func TestToolRestrictionSubagentParentLimitsChild(t *testing.T) {
 	}
 }
 
-// names 提取工具名列表。
+// names extracts tool names.
 func names(ts []*tools.Tool) []string {
 	out := make([]string, 0, len(ts))
 	for _, t := range ts {

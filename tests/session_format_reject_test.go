@@ -1,4 +1,4 @@
-// 本文件对应任务 M44：SessionHeader 格式拒绝 & 版本号。
+// M44 session-format rejection and version tests.
 package tests
 
 import (
@@ -9,7 +9,7 @@ import (
 	"github.com/herlanai/omnix/pkg/session"
 )
 
-// TestSessionFormatRejectUnknownEvent 验证未知事件类型 fail-closed 拒绝。
+// TestSessionFormatRejectUnknownEvent fails closed on unknown event types.
 func TestSessionFormatRejectUnknownEvent(t *testing.T) {
 	header := session.NewSessionHeader(brand.NewSessionID("s1"), "/ws")
 	headerBytes, err := header.Marshal()
@@ -17,7 +17,7 @@ func TestSessionFormatRejectUnknownEvent(t *testing.T) {
 		t.Fatalf("header marshal 失败: %v", err)
 	}
 
-	// 已知事件可通过
+	// Accept known events.
 	known, _ := json.Marshal(session.SessionEvent{
 		Seq: 1, Type: session.EventUserMessage, Data: session.UserMessageData{Content: "hi"},
 	})
@@ -29,7 +29,7 @@ func TestSessionFormatRejectUnknownEvent(t *testing.T) {
 		t.Fatalf("应加载 1 条事件: %d", len(events))
 	}
 
-	// 未知事件类型（构造原始 JSON，type 字段为非法值）→ CorruptEventError
+	// An invalid type in raw JSON must produce CorruptEventError.
 	unknown := []byte(`{"seq":2,"time":"2026-08-31T00:00:00Z","type":"bogus/event","data":{}}`)
 	_, _, err = session.LoadSession(headerBytes, unknown)
 	if err == nil {
@@ -40,9 +40,9 @@ func TestSessionFormatRejectUnknownEvent(t *testing.T) {
 	}
 }
 
-// TestSessionFormatCrossVersionReject 验证不同 VERSION 的会话文件互相拒绝。
+// TestSessionFormatCrossVersionReject rejects incompatible session versions.
 func TestSessionFormatCrossVersionReject(t *testing.T) {
-	// 构造版本 999 的 header（未来格式）
+	// Construct a future-format header with version 999.
 	headerBytes := []byte(`{"version":999,"id":"s_x","createdAt":"2026-08-31T00:00:00Z"}`)
 
 	known, _ := json.Marshal(session.SessionEvent{
@@ -58,12 +58,13 @@ func TestSessionFormatCrossVersionReject(t *testing.T) {
 	}
 }
 
-// TestSessionKnownEventTypesWhiteList 验证 KNOWN 集合覆盖 45+ 事件且 round-trip 可用。
+// TestSessionKnownEventTypesWhiteList verifies at least 45 known event types and valid round
+// trips.
 func TestSessionKnownEventTypesWhiteList(t *testing.T) {
 	if len(session.KNOWN_SESSION_EVENT_TYPES) < 45 {
 		t.Fatalf("白名单事件类型数 = %d, want >= 45", len(session.KNOWN_SESSION_EVENT_TYPES))
 	}
-	// 每个已知类型都能反序列化（sampleDataFor 来自 M04 测试辅助）
+	// Deserialize every known type using sampleDataFor from the M04 tests.
 	header := session.NewSessionHeader(brand.NewSessionID("s2"), "/ws")
 	headerBytes, _ := header.Marshal()
 

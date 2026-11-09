@@ -1,15 +1,8 @@
-// 本文件对应任务 M23：Tool Execution 四级 Waterfall 链。
-//
-// 对齐上游：packages/core/tools
-//
-// 一次工具调用按四级流水线执行，每一级都是一条可插拔中间件链（复用 pkg/waterfall）：
-//   - pre-execute：进入前的拦截/改写（deny 拒绝、换参、注入上下文）；
-//   - execute：真正调用工具实现（可中途换 signal 取消）；
-//   - post-execute：结果后处理（accept/block、截断、附加 meta）；
-//   - result：最终结果加工（统一包装、打点）。
-//
-// 与上游语义对齐：pre-execute 返回 deny → 该调用不执行且结果标记 isError；
-// execute 中换 signal=cancel → post-execute 可 block → 结果带上 isError。
+// The tool execution pipeline has four middleware stages (M23), matching upstream tools:
+// pre-execute can deny or rewrite inputs; execute invokes the tool and can cancel; post-execute
+// can block, truncate, or annotate results; result performs final wrapping and instrumentation.
+// A denial skips execution and produces an isError result. Cancellation or post-execute blocking
+// also marks the result as an error.
 package tools
 
 import (
@@ -23,95 +16,96 @@ import (
 	"github.com/herlanai/omnix/pkg/waterfall"
 )
 
-// Signal 是工具执行的运行信号。
+// Signal controls tool execution.
 type Signal string
 
-// 运行信号枚举。
+// Supported execution signals.
 const (
-	// SignalContinue 继续执行。
+	// SignalContinue allows execution to continue.
 	SignalContinue Signal = "continue"
-	// SignalCancel 取消执行（execute 级中间件可替换为 cancel）。
+	// SignalCancel cancels execution and may be set by execute middleware.
 	SignalCancel Signal = "cancel"
 )
 
-// ToolExecuteFunc 是工具实现的执行函数。
+// ToolExecuteFunc implements a tool's execution function.
 type ToolExecuteFunc func(ctx context.Context, input map[string]any) (any, error)
 
-// Tool 是工具定义（name/schema/execute）。
+// Tool defines a tool's name, schema, and implementation.
 type Tool struct {
-	// Name 工具名（供 LLM 调用）。
+	// Name is the model-visible tool name.
 	Name string
-	// Description 工具描述（进 prompt）。
+	// Description describes the tool in the prompt.
 	Description string
-	// Schema 参数 JSON Schema（进 prompt + 入参校验）。
+	// Schema describes and validates tool arguments.
 	Schema *JsonSchemaNode
-	// TimeoutMs 协作式超时预算（0 = 不限）；工具应尊重 ctx，超时映射为 TOOL_TIMEOUT。
+	// TimeoutMs is a cooperative time budget; zero is unlimited. Tools must honor ctx, and deadline
+	// expiry maps to TOOL_TIMEOUT.
 	TimeoutMs int
-	// Execute 具体实现。
+	// Execute is the tool implementation.
 	Execute ToolExecuteFunc
 }
 
-// ToolCallRequest 是一次工具调用请求。
+// ToolCallRequest describes one tool invocation.
 type ToolCallRequest struct {
-	// CallID 调用 ID（与 tool/call → tool/result 配对）。
+	// CallID pairs tool/call with tool/result.
 	CallID brand.ToolCallID
-	// Tool 工具名。
+	// Tool is the tool name.
 	Tool string
-	// Input 解析后的参数。
+	// Input contains parsed arguments.
 	Input map[string]any
 }
 
-// ToolCallResult 是一次工具调用的结果。
+// ToolCallResult holds the outcome of a tool invocation.
 type ToolCallResult struct {
-	// CallID 与请求配对。
+	// CallID pairs this result with its request.
 	CallID brand.ToolCallID
-	// IsError 是否视为失败（deny/block/cancel 或工具返回错误）。
+	// IsError reports denial, blocking, cancellation, or a tool execution error.
 	IsError bool
-	// Value 结构化结果值。
+	// Value is the structured result.
 	Value any
-	// Error 错误信息（IsError 时填充）。
+	// Error describes a failure when IsError is true.
 	Error string
-	// ErrorCode 稳定错误码（可选，用于路由/重放）。
+	// ErrorCode is an optional stable code for routing and replay.
 	ErrorCode string
 }
 
-// ExecContext 是贯穿四级链的共享上下文（payload）。
+// ExecContext carries shared state through all four pipeline stages.
 type ExecContext struct {
-	// Request 原始请求。
+	// Request is the original invocation request.
 	Request *ToolCallRequest
-	// Result 结果（由各阶段填充）。
+	// Result is populated by the pipeline stages.
 	Result *ToolCallResult
-	// Signal 运行信号（execute 级可替换）。
+	// Signal controls execution and may be changed by execute middleware.
 	Signal Signal
-	// Denied 是否被 pre/post 级拒绝。
+	// Denied reports rejection by pre-execute or post-execute middleware.
 	Denied bool
-	// Meta 附加元数据（post 级可写入，供展示/审计）。
+	// Meta holds display and audit metadata added by middleware.
 	Meta map[string]any
-	// Ctx 携带进入本次执行的父 ctx（H01：取消/超时/追踪 propagate 到工具实现）。
+	// Ctx carries the parent execution context, propagating cancellation, deadlines, and tracing to
+	// tools (H01).
 	Ctx context.Context
 }
 
-// Pipeline 是四级工具执行流水线。
+// Pipeline implements the four-stage tool execution chain.
 type Pipeline struct {
 	pre     *waterfall.Chain[ExecContext]
 	execute *waterfall.Chain[ExecContext]
 	post    *waterfall.Chain[ExecContext]
 	result  *waterfall.Chain[ExecContext]
-	// pooled H06：是否启用对象池（Run 内部复用 ExecContext/Meta map）。
-	// 默认 false（与旧行为完全一致）；SetPooled(true) 后 Run 走池化路径。
+	// pooled enables reuse of ExecContext and its Meta map (H06). It defaults to false;
+	// SetPooled(true) selects the pooled Run path.
 	pooled     bool
 	registered map[string]*Tool
 }
 
-// SetPooled 设置是否启用 H06 对象池回收（opt-in，默认关闭）。
-// 开启后 Run 复用 ExecContext 及其 Meta map，降低 GC；返回的 Result 仍为每次新建，
-// 调用方可安全持有。
+// SetPooled enables opt-in ExecContext and Meta-map reuse to reduce allocations. Results remain
+// separately allocated and safe for callers to retain.
 func (p *Pipeline) SetPooled(enabled bool) *Pipeline {
 	p.pooled = enabled
 	return p
 }
 
-// NewPipeline 构建空流水线（各阶段均可追加中间件）。
+// NewPipeline creates an empty pipeline whose stages accept middleware.
 func NewPipeline() *Pipeline {
 	return &Pipeline{
 		pre:     waterfall.New[ExecContext](),
@@ -121,32 +115,32 @@ func NewPipeline() *Pipeline {
 	}
 }
 
-// UsePre 追加 pre-execute 中间件（拦截/改写入参，可 deny）。
+// UsePre appends middleware that can inspect, rewrite, or deny inputs.
 func (p *Pipeline) UsePre(h ...waterfall.Handler[ExecContext]) *Pipeline {
 	p.pre.Use(h...)
 	return p
 }
 
-// UseExecute 追加 execute 中间件（包裹工具实现，可换 signal）。
+// UseExecute appends middleware wrapping tool execution and its signal.
 func (p *Pipeline) UseExecute(h ...waterfall.Handler[ExecContext]) *Pipeline {
 	p.execute.Use(h...)
 	return p
 }
 
-// UsePost 追加 post-execute 中间件（accept/block/截断/加 meta）。
+// UsePost appends middleware that can accept, block, truncate, or annotate results.
 func (p *Pipeline) UsePost(h ...waterfall.Handler[ExecContext]) *Pipeline {
 	p.post.Use(h...)
 	return p
 }
 
-// UseResult 追加 result 中间件（最终加工）。
+// UseResult appends final-result middleware.
 func (p *Pipeline) UseResult(h ...waterfall.Handler[ExecContext]) *Pipeline {
 	p.result.Use(h...)
 	return p
 }
 
-// Run 执行一次工具调用，走完四级流水线，返回结果。
-// 若已通过 SetPooled(true) 启用对象池，则内部走 RunPooled（等价语义，复用热结构）。
+// Run executes one invocation through all four stages and returns its result. When pooling is
+// enabled, RunPooled provides equivalent semantics while reusing internal state.
 func (p *Pipeline) Run(ctx context.Context, req *ToolCallRequest, tool *Tool) *ToolCallResult {
 	if p.pooled {
 		return p.RunPooled(ctx, req, tool)
@@ -163,7 +157,7 @@ func (p *Pipeline) Run(ctx context.Context, req *ToolCallRequest, tool *Tool) *T
 	return p.runStages(ctx, ec, tool)
 }
 
-// executeInner 构造 execute 阶段最内层的真实工具调用中间件。
+// executeInner constructs the innermost middleware that invokes the tool.
 func executeInner(tool *Tool) waterfall.Handler[ExecContext] {
 	return func(ec *ExecContext, next waterfall.NextFunc) error {
 		if tool == nil || tool.Execute == nil {
@@ -171,7 +165,8 @@ func executeInner(tool *Tool) waterfall.Handler[ExecContext] {
 			ec.Result.Error = "tool implementation missing"
 			return next()
 		}
-		// H01：把本次执行的父 ctx（含取消/超时/追踪）透传给工具实现，而非重建 Background。
+		// Propagate the parent context's cancellation, deadline, and tracing rather than replacing it
+		// with Background (H01).
 		ctx := withExecContext(ec.Ctx, ec)
 		if tool.TimeoutMs > 0 {
 			var cancel context.CancelFunc
@@ -193,7 +188,7 @@ func executeInner(tool *Tool) waterfall.Handler[ExecContext] {
 	}
 }
 
-// WithTool 便捷方法：创建一条包含真实工具实现 execute 阶段的流水线。
+// WithTool copies the pipeline and appends the tool's execute stage.
 func (p *Pipeline) WithTool(tool *Tool) *Pipeline {
 	if p.registered == nil {
 		p.registered = make(map[string]*Tool)
@@ -204,20 +199,20 @@ func (p *Pipeline) WithTool(tool *Tool) *Pipeline {
 	return p
 }
 
-// contextWithMeta 将 ExecContext 注入 ctx（供工具实现读取 Meta/信号）。
+// contextWithMeta exposes ExecContext metadata and signals to tool implementations.
 func contextWithMeta(ec *ExecContext) context.Context {
 	return withExecContext(context.Background(), ec)
 }
 
-// execContextKey 是 context 中 ExecContext 的键类型。
+// execContextKey identifies ExecContext within a context.
 type execContextKey struct{}
 
-// withExecContext 返回携带 ExecContext 的 context。
+// withExecContext returns a context carrying ExecContext.
 func withExecContext(ctx context.Context, ec *ExecContext) context.Context {
 	return context.WithValue(ctx, execContextKey{}, ec)
 }
 
-// ExecContextFrom 从 ctx 中取出 ExecContext（工具实现内可用）。
+// ExecContextFrom retrieves execution state inside a tool implementation.
 func ExecContextFrom(ctx context.Context) (*ExecContext, bool) {
 	ec, ok := ctx.Value(execContextKey{}).(*ExecContext)
 	return ec, ok

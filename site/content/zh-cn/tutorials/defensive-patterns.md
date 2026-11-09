@@ -27,10 +27,10 @@ Agent 长跑会反复打开进程、临时文件、事件监听，任何一处�
 
 ```go
 dispose := bus.On(handler)
-defer dispose()                 // 监听器随组件销毁摘除
+defer dispose()                 // Remove listeners when the component is disposed.
 
 proc, kill, err := subprocess.Start(...)
-defer kill()                    // 子进程随 Turn 结束回收
+defer kill()                    // Clean up child processes at the end of the turn.
 ```
 
 - 子进程（`pkg/subprocess`）、终端会话要在 Turn/Step 结束时确定关闭，取消信号沿 ctx 传播；

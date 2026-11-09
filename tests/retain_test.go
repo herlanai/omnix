@@ -1,4 +1,4 @@
-// Package tests 的 retain 有界保留验收测试。
+// Bounded retention tests.
 package tests
 
 import (

@@ -1,12 +1,7 @@
-// Package commands 提供 slash 命令（Commands）系统。
-//
-// 对齐上游：packages/interaction/commands
-//
-// 设计要点：
-//   - CommandDefinition 描述一个 slash 命令（如 /plan off）；
-//   - 命令入口通过 ctx.commands register/list/execute 路由；
-//   - 执行 `#command/run` 与 `#command/done` 事件（而非当成普通 user/message）；
-//   - 例如 `/plan off` 直接写入 plan/mode(off) 事件，而不是作为对话消息。
+// Package commands implements slash commands, matching interaction/commands.
+// Definitions describe commands such as /plan off; ctx.commands registers, lists,
+// and dispatches them. Execution emits command/run and command/done rather than
+// ordinary user messages. For example, /plan off directly emits plan/mode(off).
 package commands
 
 import (
@@ -20,25 +15,25 @@ import (
 	"github.com/herlanai/omnix/pkg/session"
 )
 
-// CommandHandler 是命令处理函数：接收参数字符串与事件日志，写事件并返回输出。
+// CommandHandler receives arguments and a log, writes events, and returns output.
 type CommandHandler func(ctx context.Context, args string, sl *session.SessionLog) (output string, err error)
 
-// CommandDefinition 是一个 slash 命令定义。
+// CommandDefinition defines a slash command.
 type CommandDefinition struct {
-	// Name 命令名（不含 "/" 前缀，如 "plan"）。
+	// Name excludes the slash prefix, for example plan.
 	Name string
-	// Description 命令描述（帮助展示）。
+	// Description is shown in help.
 	Description string
-	// Handler 执行函数。
+	// Handler executes the command.
 	Handler CommandHandler
 }
 
-// Registry 是命令注册中心（H07：基于可冻结共享注册表，Freeze 后读路径无锁）。
+// Registry uses a freezable shared registry with immutable snapshots after Freeze (H07).
 type Registry struct {
 	cmds *registry.Freezable[string, *CommandDefinition]
 }
 
-// NewRegistry 创建命令注册中心，并注册内置 plan/goal 命令。
+// NewRegistry creates a registry with the built-in plan and goal commands.
 func NewRegistry() *Registry {
 	r := &Registry{cmds: registry.NewFreezable[string, *CommandDefinition]()}
 	_ = r.cmds.Put("plan", &CommandDefinition{Name: "plan", Description: "切换计划模式 (on/off)", Handler: handlePlan})
@@ -46,7 +41,7 @@ func NewRegistry() *Registry {
 	return r
 }
 
-// Register 注册一个命令；冻结后返回 ErrFrozen。
+// Register adds a command or returns ErrFrozen after freezing.
 func (r *Registry) Register(def *CommandDefinition) error {
 	if def == nil || def.Name == "" {
 		return fmt.Errorf("commands: name required")
@@ -54,25 +49,25 @@ func (r *Registry) Register(def *CommandDefinition) error {
 	return r.cmds.Put(def.Name, def)
 }
 
-// Freeze 冻结命令注册表（不可逆）：此后读路径无锁走只读快照，写返回 ErrFrozen。
+// Freeze irreversibly enables immutable snapshot reads and rejects writes with ErrFrozen.
 func (r *Registry) Freeze() { r.cmds.Freeze() }
 
-// IsFrozen 返回注册表是否已冻结。
+// IsFrozen reports whether the registry is frozen.
 func (r *Registry) IsFrozen() bool { return r.cmds.IsFrozen() }
 
-// List 返回全部命令名（字典序）。
+// List returns command names in lexical order.
 func (r *Registry) List() []string {
 	names := r.cmds.Keys()
 	sort.Strings(names)
 	return names
 }
 
-// Get 按名取命令（冻结后无锁读快照）。
+// Get looks up a command, using immutable snapshots after freezing.
 func (r *Registry) Get(name string) (*CommandDefinition, bool) {
 	return r.cmds.Get(name)
 }
 
-// Dispatch 解析 "/name args" 并执行对应命令（不存在返回 ErrUnknownCommand）。
+// Dispatch parses /name args and runs the command, or returns ErrUnknownCommand.
 func (r *Registry) Dispatch(ctx context.Context, raw string, sl *session.SessionLog) (string, error) {
 	trimmed := strings.TrimSpace(raw)
 	if len(trimmed) == 0 || trimmed[0] != '/' {
@@ -91,26 +86,28 @@ func (r *Registry) Dispatch(ctx context.Context, raw string, sl *session.Session
 		return "", ErrUnknownCommand(name)
 	}
 
-	// 写 command/run 事件
+	// Emit command/run.
 	_, _ = sl.Append(session.CommandRunData{Command: "/" + name, Args: args})
 
-	// 执行处理函数
+	// Execute the handler.
 	output, err := def.Handler(ctx, args, sl)
 	if err != nil {
 		return "", err
 	}
 
-	// 写 command/done 事件
+	// Emit command/done.
 	_, _ = sl.Append(session.CommandDoneData{Command: "/" + name})
 	return output, nil
 }
 
-// ErrUnknownCommand 表示命令不存在。
+// ErrUnknownCommand indicates an unregistered command.
 type ErrUnknownCommand string
 
-func (e ErrUnknownCommand) Error() string { return fmt.Sprintf("commands: unknown command %q", string(e)) }
+func (e ErrUnknownCommand) Error() string {
+	return fmt.Sprintf("commands: unknown command %q", string(e))
+}
 
-// handlePlan 处理 /plan：写入 plan/mode(off|on) 事件而非 user/message。
+// handlePlan emits plan/mode(off|on) for /plan, rather than user/message.
 func handlePlan(ctx context.Context, args string, sl *session.SessionLog) (string, error) {
 	mode := "off"
 	if args == "on" {
@@ -122,7 +119,7 @@ func handlePlan(ctx context.Context, args string, sl *session.SessionLog) (strin
 	return "plan mode = " + mode, nil
 }
 
-// handleGoal 处理 /goal：写入 goal/change 事件（CAS revision 从 fold 派生）。
+// handleGoal emits goal/change with a CAS revision derived from the fold.
 func handleGoal(ctx context.Context, args string, sl *session.SessionLog) (string, error) {
 	fold := session.FoldGoalChange(sl.Events())
 	revision := fold.Revision + 1
@@ -131,18 +128,18 @@ func handleGoal(ctx context.Context, args string, sl *session.SessionLog) (strin
 		desc = "(空目标)"
 	}
 	if _, err := sl.Append(session.GoalChangeData{
-		GoalID:    brand.NewSessionID("g_" + itoa64(revision)).Raw(),
-		Phase:     "active",
+		GoalID:      brand.NewSessionID("g_" + itoa64(revision)).Raw(),
+		Phase:       "active",
 		Description: desc,
-		MaxRounds: 5,
-		Revision:  revision,
+		MaxRounds:   5,
+		Revision:    revision,
 	}); err != nil {
 		return "", err
 	}
 	return "goal set: " + desc, nil
 }
 
-// itoa64 最小 uint64 转字符串。
+// itoa64 converts a uint64 to a string.
 func itoa64(n uint64) string {
 	if n == 0 {
 		return "0"

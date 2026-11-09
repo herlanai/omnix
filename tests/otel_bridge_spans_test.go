@@ -1,7 +1,5 @@
-// 本文件验证任务 S07：OTel Telemetry 导出。
-//
-// 覆盖：S05 三类钩子经 OTelBridge 桥到 InMemoryExporter 各产出一条 span；每条 span
-// 携带 session id + turn id + step id 三 baggage；事件/分片/工具 Kind 正确。
+// S07 OTel tests bridge all three S05 hooks into InMemoryExporter spans, each with session, turn,
+// and step baggage and the correct event/chunk/tool kind.
 package tests
 
 import (
@@ -12,12 +10,12 @@ import (
 	"github.com/herlanai/omnix/pkg/telemetry"
 )
 
-// TestOTelBridgeSpansCarryBaggage 验证三类埋点都导出 span 且带三 id baggage。
+// TestOTelBridgeSpansCarryBaggage verifies all three instrumentation kinds export the three IDs.
 func TestOTelBridgeSpansCarryBaggage(t *testing.T) {
 	tm := telemetry.New()
 	exporter := &telemetry.InMemoryExporter{}
 
-	// 固定 baggage：session/turn/step。
+	// Fixed session, turn, and step baggage.
 	bag := telemetry.Baggage{SessionID: "s-1", TurnID: "t-1", StepID: "st-1"}
 	bridge := telemetry.NewOTelBridge(exporter, func() telemetry.Baggage { return bag })
 	bridge.Attach(tm)
@@ -37,7 +35,7 @@ func TestOTelBridgeSpansCarryBaggage(t *testing.T) {
 			t.Fatalf("span[%d] 应带 session/turn/step baggage，实际 %+v", i, sp.Baggage)
 		}
 	}
-	// Kind 顺序：event(chunk/tool 顺序按注册顺序由遥测分发决定，这里只验各 Kind 出现。
+	// Check that every kind appears; ordering follows telemetry registration and is not asserted here.
 	kinds := map[string]bool{}
 	for _, sp := range spans {
 		kinds[sp.Kind] = true
@@ -47,7 +45,7 @@ func TestOTelBridgeSpansCarryBaggage(t *testing.T) {
 	}
 }
 
-// TestOTelSpanNameSuffix 验证工具 span 名带工具名（session.tool.<tool>）。
+// TestOTelSpanNameSuffix includes the tool name in session.tool.<tool>.
 func TestOTelSpanNameSuffix(t *testing.T) {
 	tm := telemetry.New()
 	exporter := &telemetry.InMemoryExporter{}
@@ -62,7 +60,7 @@ func TestOTelSpanNameSuffix(t *testing.T) {
 	}
 }
 
-// TestOTelNoBaggageProvider 验证无 baggage provider 也不 panic，span 空 baggage 可导出。
+// TestOTelNoBaggageProvider exports spans with empty baggage without panicking.
 func TestOTelNoBaggageProvider(t *testing.T) {
 	tm := telemetry.New()
 	exporter := &telemetry.InMemoryExporter{}

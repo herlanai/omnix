@@ -1,4 +1,4 @@
-// Package tests 的 skill grammar 验收测试。
+// Skill grammar tests.
 package tests
 
 import (

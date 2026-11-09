@@ -1,4 +1,4 @@
-// 本文件实现 sqlitekv 后端：基于 SQLite 的键值存储（纯 Go 驱动 modernc.org/sqlite）。
+// SQLite key-value storage using the pure-Go modernc.org/sqlite driver.
 package storage
 
 import (
@@ -6,16 +6,15 @@ import (
 	"database/sql"
 	"fmt"
 
-	_ "modernc.org/sqlite" // 纯 Go SQLite 驱动
+	_ "modernc.org/sqlite" // Pure-Go SQLite driver.
 )
 
-// SQLiteKV 是基于 SQLite 的 Backend 实现。
-// 表结构：kv(key TEXT PRIMARY KEY, version INTEGER, data BLOB)。
+// SQLiteKV implements Backend using kv(key TEXT PRIMARY KEY, version INTEGER, data BLOB).
 type SQLiteKV struct {
 	db *sql.DB
 }
 
-// NewSQLiteKV 打开（或创建）SQLite 数据库并初始化表。
+// NewSQLiteKV opens or creates a database and initializes its table.
 func NewSQLiteKV(path string) (*SQLiteKV, error) {
 	db, err := sql.Open("sqlite", path)
 	if err != nil {
@@ -34,12 +33,12 @@ func NewSQLiteKV(path string) (*SQLiteKV, error) {
 	return &SQLiteKV{db: db}, nil
 }
 
-// Close 关闭底层数据库连接。
+// Close closes the underlying database connection.
 func (s *SQLiteKV) Close() error {
 	return s.db.Close()
 }
 
-// Get 实现 Backend。
+// Get implements Backend.
 func (s *SQLiteKV) Get(ctx context.Context, key string) ([]byte, uint64, error) {
 	var data []byte
 	var version uint64
@@ -54,7 +53,7 @@ func (s *SQLiteKV) Get(ctx context.Context, key string) ([]byte, uint64, error) 
 	return data, version, nil
 }
 
-// Put 实现 Backend（CAS 语义：通过 UPDATE 影响行数判断版本冲突）。
+// Put implements CAS, detecting conflicts from affected UPDATE rows.
 func (s *SQLiteKV) Put(ctx context.Context, key string, data []byte, expectedVersion uint64) (uint64, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -62,12 +61,12 @@ func (s *SQLiteKV) Put(ctx context.Context, key string, data []byte, expectedVer
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	// 查询当前版本
+	// Read the current version.
 	var currentVersion uint64
 	err = tx.QueryRowContext(ctx, `SELECT version FROM kv WHERE key = ?`, key).Scan(&currentVersion)
 	switch {
 	case err == sql.ErrNoRows:
-		// key 不存在：仅允许新建
+		// Missing keys may only be created.
 		if expectedVersion != 0 {
 			return 0, &ErrCASMismatch{Key: key, ExpectedVersion: expectedVersion, ActualVersion: 0}
 		}
@@ -77,7 +76,7 @@ func (s *SQLiteKV) Put(ctx context.Context, key string, data []byte, expectedVer
 	case err != nil:
 		return 0, err
 	default:
-		// 版本冲突检查
+		// Check for a version conflict.
 		if currentVersion != expectedVersion {
 			return 0, &ErrCASMismatch{Key: key, ExpectedVersion: expectedVersion, ActualVersion: currentVersion}
 		}
@@ -93,13 +92,13 @@ func (s *SQLiteKV) Put(ctx context.Context, key string, data []byte, expectedVer
 	return expectedVersion + 1, nil
 }
 
-// Delete 实现 Backend。
+// Delete implements Backend.
 func (s *SQLiteKV) Delete(ctx context.Context, key string) error {
 	_, err := s.db.ExecContext(ctx, `DELETE FROM kv WHERE key = ?`, key)
 	return err
 }
 
-// List 实现 Backend。
+// List implements Backend.
 func (s *SQLiteKV) List(ctx context.Context, prefix string) ([]string, error) {
 	var keys []string
 	var rows *sql.Rows

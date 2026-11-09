@@ -1,16 +1,8 @@
-// 本示例演示 omnix 的 Agent Turn/Step 双循环用法（进程内集成）。
-//
-// 流程：NewAgent 装配（SessionLog + SystemPrompt + 工具流水线 + LLM 适配器）→
-//
-//	Run(input) 提交一个 turn → Agent 走 turn/start → step/start → 组装 prompt →
-//	LLM 流式 chunk → 若有 tool_call 则执行工具（step 续步）→ step/end → turn/end。
-//
-// 运行方式（仓库根目录）：
-//
-//	go run ./examples/agent_loop
-//
-// 说明：示例使用一个脚本化假 LLM 适配器【不发起真实网络】；接入真实模型时
-// 换用 provider_deepseek.NewDeepSeek(store)（见 examples/usage）即可。
+// This example demonstrates the in-process omnix Agent turn/step loop. NewAgent assembles the
+// session log, system prompt, tool pipeline, and LLM adapter. Run(input) starts a turn; each step
+// builds a prompt, streams LLM chunks, and executes any tool calls before continuing or ending the
+// turn. Run: go run ./examples/agent_loop. The scripted adapter makes no network requests; replace
+// it with provider_deepseek.NewDeepSeek(store) for a real model (see examples/usage).
 package main
 
 import (
@@ -26,10 +18,10 @@ import (
 	"github.com/herlanai/omnix/pkg/tools"
 )
 
-// scriptedLLM 是脚本化假 LLM：按调用次数依次产出（可含 tool_call → text）。
-// 不发起真实网络，便于 println 演示 turn/step 流转。
+// scriptedLLM emits scripted responses in call order, including tool calls followed by text. It
+// makes no network requests, keeping the turn/step demonstration reproducible.
 type scriptedLLM struct {
-	replies []func(cb func(llm.StreamChunk)) // 每次 Chat 消费一个
+	replies []func(cb func(llm.StreamChunk)) // Consume one script per Chat call.
 	callN   int
 }
 
@@ -40,7 +32,7 @@ func (d *scriptedLLM) Chat(ctx context.Context, req llm.ChatRequest, cb func(llm
 	if d.callN <= len(d.replies) {
 		d.replies[d.callN-1](cb)
 	}
-	// 末尾发 done 分片（agent 据此收尾 message 与 turn）。
+	// Emit a final done chunk so the agent can finish the message and turn.
 	cb(llm.StreamChunk{Kind: llm.ChunkDone})
 	return llm.Usage{PromptTokens: int(len(req.Messages)), CompletionTokens: 2}, nil
 }
@@ -48,14 +40,15 @@ func (d *scriptedLLM) Chat(ctx context.Context, req llm.ChatRequest, cb func(llm
 func main() {
 	ctx := context.Background()
 
-	// 1. 会话日志（事件溯源；Agent 把 turn/step/assistant/工具 事件都写进来）。
+	// 1. Create the event-sourced session log for turn, step, assistant, and tool events.
 	sl := session.NewSessionLog(brand.NewSessionID("agent-loop-demo"))
 
-	// 2. System prompt 组装器 + 一个 persona section。
+	// 2. Create the system prompt assembler with a persona section.
 	sys := sysprompt.New()
 	sys.Register("persona", 100, "你是一个使用 omnix 的演示 Agent。")
 
-	// 3. 工具流水线 + 一个演示工具（e.g. "now" 返回当前时间，模拟工具执行续步）。
+	// 3. Create a tool pipeline with a demonstration tool: now returns the current time and triggers
+	// another step.
 	p := tools.NewPipeline().WithTool(&tools.Tool{
 		Name:        "now",
 		Description: "返回当前时间",
@@ -64,8 +57,8 @@ func main() {
 		},
 	})
 
-	// 4. 脚本化 LLM：第一次调用产出一个 tool_call（now），第二次产出最终文本 ——
-	//    以此展示「turn 内先工具续步、再结束」的 Step 循环。
+	// 4. The scripted LLM first calls now, then returns final text, demonstrating tool execution and
+	// continuation within one turn.
 	adapter := &scriptedLLM{
 		replies: []func(cb func(llm.StreamChunk)){
 			func(cb func(llm.StreamChunk)) {
@@ -83,7 +76,7 @@ func main() {
 	a := agent.NewAgent(brand.NewSessionID("agent-loop-demo"), sl, sys, p, adapter)
 	defer a.Dispose()
 
-	// 6. 提交一个 turn（异步）。可绑定可取消父 ctx（H01）。
+	// 6. Submit a turn asynchronously; a cancellable parent context may be supplied (H01).
 	a.SetRunContext(ctx, 30*time.Second)
 	if err := a.Run("现在几点？"); err != nil {
 		fmt.Printf("Run 失败: %v\n", err)
@@ -98,12 +91,12 @@ func main() {
 		return
 	}
 
-	// 9. 打印事件溯源流，展示 turn/step 双循环结构。
+	// 9. Print the event stream to show the nested turn/step structure.
 	printEvents(sl)
 	fmt.Println("\nAgent Turn/Step 循环示例完成。")
 }
 
-// printEvents 打印会话事件序列（便于观察双循环）。
+// printEvents prints the session event sequence to expose the nested loops.
 func printEvents(sl *session.SessionLog) {
 	seq := 0
 	for _, ev := range sl.Events() {

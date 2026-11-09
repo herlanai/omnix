@@ -1,17 +1,17 @@
-// aborted.go 复刻官方 session-checkpoint-policy 的"派发前取消"语义：当请求在
-// 真正进入工具体之前就已被取消时，返回一个带稳定错误码的 isError 结果，而不是
-// 带着半截状态进入工具实现。
+// Match the upstream session checkpoint policy for cancellation before dispatch. Return an
+// isError result with a stable code before entering the tool body, rather than executing with
+// partially canceled state.
 package tools
 
 import "github.com/herlanai/omnix/pkg/brand"
 
-// AbortedBeforeDispatch 是"工具在派发前被取消"的稳定错误码。
+// AbortedBeforeDispatch is the stable code for a tool canceled before dispatch.
 const AbortedBeforeDispatch = "TOOL_ABORTED_BEFORE_DISPATCH"
 
-// AbortedBeforeDispatchMessage 是模型可见的提示文本。
+// AbortedBeforeDispatchMessage is the model-visible cancellation message.
 const AbortedBeforeDispatchMessage = "tool call aborted before dispatch"
 
-// AbortedBeforeDispatchResult 构造派发前取消的结果。
+// AbortedBeforeDispatchResult constructs a pre-dispatch cancellation result.
 func AbortedBeforeDispatchResult(callID brand.ToolCallID) *ToolCallResult {
 	return &ToolCallResult{
 		CallID:    callID,

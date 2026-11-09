@@ -1,14 +1,9 @@
-// Package subagent 提供子代理接缝（任务 S02：Subagent 3 后端）。
-//
-// 对齐上游：packages/subagent/subagent + providers
-//
-// 设计要点：
-//   - Provider 抽象把「如何起一个子代理」与「子代理执行什么」解耦，支持三种后端：
-//       * InProcess —— 进程内 fork（复用当前 Agent 上下文执行一个子任务，单测主用）；
-//       * ACP / ForkCopy —— 原生协议/复制进程类后端（本版提供最小可运行桩，接口稳定）；
-//   - ForkLineage 记录父子关系（parent 会话 → 子会话），供因果归因（与 M33 Initiator 一致）；
-//   - Handle 是子代理的生命周期句柄：Drain 阻塞等子代理落盘完成；Dispose 释放并级联取消子代理
-//     （父 dispose → 子自动 drain/清理）。
+// Package subagent defines three delegation backends (S02), matching subagent
+// and providers upstream. Provider separates launching from task execution.
+// InProcess reuses agent context; ACP and ForkCopy are stable-interface stubs.
+// ForkLineage records parent/child sessions for causal attribution (M33). Handle
+// manages lifecycle: Drain waits for completion and persistence, while Dispose
+// releases the child as part of cascading parent cleanup.
 package subagent
 
 import (
@@ -18,41 +13,39 @@ import (
 	"github.com/herlanai/omnix/pkg/brand"
 )
 
-// ============================================================================
-// 类型
-// ============================================================================
+// Types.
 
-// ForkLineage 记录一次 fork 的家谱（父会话 → 子会话）。
+// ForkLineage records a parent-to-child session relationship.
 type ForkLineage struct {
-	Parent  *brand.SessionID `json:"parent,omitempty"`  // 父会话（nil=顶层）
-	Session brand.SessionID  `json:"session"`            // 子会话
+	Parent  *brand.SessionID `json:"parent,omitempty"` // Parent session; nil for a top-level agent.
+	Session brand.SessionID  `json:"session"`          // Child session.
 }
 
-// SpawnRequest 是生成子代理的请求。
+// SpawnRequest requests a child agent.
 type SpawnRequest struct {
 	Parent    *brand.SessionID `json:"parent,omitempty"`
 	Input     string           `json:"input"`
 	MaxRounds int              `json:"maxRounds,omitempty"`
 }
 
-// SpawnResult 是一次子代理运行的输出。
+// SpawnResult contains a child agent's output.
 type SpawnResult struct {
 	Lineage ForkLineage `json:"lineage"`
 	Output  string      `json:"output"`
 	Err     string      `json:"err,omitempty"`
 }
 
-// Provider 是子代理后端接缝。
+// Provider abstracts child-agent backends.
 type Provider interface {
-	// Name 返回后端名（如 "in-process" / "acp" / "fork-copy"）。
+	// Name returns the backend name, such as in-process, acp, or fork-copy.
 	Name() string
-	// Spawn 生成并运行一个子代理，返回可释放的句柄。
+	// Spawn starts a child agent and returns a disposable handle.
 	Spawn(ctx context.Context, req SpawnRequest) (*Handle, error)
 }
 
-// Handle 是子代理生命周期句柄。
+// Handle manages a child agent's lifecycle.
 type Handle struct {
-	Provider string   // 所属后端名
+	Provider string // Owning backend name.
 	Lineage  ForkLineage
 	mu       sync.Mutex
 	disposed bool
@@ -60,12 +53,12 @@ type Handle struct {
 	done     chan struct{}
 }
 
-// newHandle 构造句柄。
+// newHandle constructs a handle.
 func newHandle(provider string, lineage ForkLineage) *Handle {
 	return &Handle{Provider: provider, Lineage: lineage, done: make(chan struct{})}
 }
 
-// markDrained 标记子代理已落盘/结束（receiver 侧完成时调用）。
+// markDrained marks the child persisted/completed when the receiver finishes.
 func (h *Handle) markDrained() {
 	h.mu.Lock()
 	if !h.drained {
@@ -75,7 +68,7 @@ func (h *Handle) markDrained() {
 	h.mu.Unlock()
 }
 
-// Drain 阻塞直到子代理完成（或 ctx 取消）。
+// Drain waits for completion or context cancellation.
 func (h *Handle) Drain(ctx context.Context) error {
 	select {
 	case <-h.done:
@@ -85,18 +78,18 @@ func (h *Handle) Drain(ctx context.Context) error {
 	}
 }
 
-// Dispose 释放子代理：标记 disposed（父 dispose 触发子级联清理）。
+// Dispose marks the child disposed for cascading parent cleanup.
 func (h *Handle) Dispose() {
 	h.mu.Lock()
 	h.disposed = true
 	h.mu.Unlock()
-	// 释放即视为接收方应尽快清理；此处标记 drained 以便 Drain 立即返回。
+	// Signal receiver cleanup and mark drained so Drain returns immediately.
 	h.markDrained()
 }
 
-// -------------------- ACP / ForkCopy 桩 Provider --------------------
+// ACP and ForkCopy placeholder providers.
 
-// acpProvider 是 ACP child 后端的桩（真实接入原生 MCP 时替换 Spawn 实现）。
+// acpProvider is a child-backend stub; replace Spawn for native protocol integration.
 type acpProvider struct{}
 
 func (acpProvider) Name() string { return "acp" }
@@ -104,12 +97,12 @@ func (acpProvider) Name() string { return "acp" }
 func (acpProvider) Spawn(ctx context.Context, req SpawnRequest) (*Handle, error) {
 	sid := brand.NewSessionID("acp-" + req.Input)
 	h := newHandle("acp", ForkLineage{Parent: req.Parent, Session: sid})
-	// 桩：同步标记完成。
+	// The stub completes synchronously.
 	h.markDrained()
 	return h, nil
 }
 
-// forkCopyProvider 是 fork-copy-process 后端的桩（复制进程执行）。
+// forkCopyProvider is a fork-copy-process backend stub.
 type forkCopyProvider struct{}
 
 func (forkCopyProvider) Name() string { return "fork-copy" }
@@ -125,23 +118,23 @@ func (forkCopyProvider) Spawn(ctx context.Context, req SpawnRequest) (*Handle, e
 // Runtime
 // ============================================================================
 
-// Runtime 是子代理运行时：持有 Provider 注册表与活跃句柄。
+// Runtime owns provider registrations and active child handles.
 type Runtime struct {
-	mu       sync.RWMutex
+	mu        sync.RWMutex
 	providers map[string]Provider
-	handles  map[string]*Handle
+	handles   map[string]*Handle
 }
 
-// NewRuntime 创建运行时，并注册内置 ACP 与 ForkCopy 桩 Provider。
+// NewRuntime registers the built-in ACP and ForkCopy stubs.
 func NewRuntime() *Runtime {
 	r := &Runtime{providers: map[string]Provider{}, handles: map[string]*Handle{}}
-	// 内置可运行桩。
+	// Built-in runnable stubs.
 	_ = r.RegisterProvider(acpProvider{})
 	_ = r.RegisterProvider(forkCopyProvider{})
 	return r
 }
 
-// RegisterProvider 注册后端。
+// RegisterProvider registers a backend.
 func (r *Runtime) RegisterProvider(p Provider) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -149,7 +142,7 @@ func (r *Runtime) RegisterProvider(p Provider) error {
 	return nil
 }
 
-// Provider 获取指定后端。
+// Provider looks up a backend.
 func (r *Runtime) Provider(name string) (Provider, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -157,7 +150,7 @@ func (r *Runtime) Provider(name string) (Provider, bool) {
 	return p, ok
 }
 
-// Spawn 通过指定后端生成子代理，并登记句柄。
+// Spawn launches through the selected backend and registers its handle.
 func (r *Runtime) Spawn(ctx context.Context, providerName string, req SpawnRequest) (*Handle, error) {
 	p, ok := r.Provider(providerName)
 	if !ok {
@@ -173,7 +166,7 @@ func (r *Runtime) Spawn(ctx context.Context, providerName string, req SpawnReque
 	return h, nil
 }
 
-// DisposeOwner 释放某父会话名下的全部子代理句柄（级联取消）。
+// DisposeOwner disposes all children belonging to a parent session.
 func (r *Runtime) DisposeOwner(parent brand.SessionID) {
 	r.mu.RLock()
 	handles := make([]*Handle, 0, len(r.handles))
@@ -188,25 +181,23 @@ func (r *Runtime) DisposeOwner(parent brand.SessionID) {
 	}
 }
 
-// ActiveCount 返回当前登记句柄数（诊断用）。
+// ActiveCount returns the registered handle count for diagnostics.
 func (r *Runtime) ActiveCount() int {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return len(r.handles)
 }
 
-// ============================================================================
-// 错误
-// ============================================================================
+// Errors.
 
-// ErrUnknownProvider 表示后端未注册。
+// ErrUnknownProvider indicates an unregistered backend.
 type ErrUnknownProvider struct{ Name string }
 
 func (e *ErrUnknownProvider) Error() string {
 	return "subagent: unknown provider " + e.Name
 }
 
-// IsUnknownProvider 判断是否为未知后端错误。
+// IsUnknownProvider identifies unknown-backend errors.
 func IsUnknownProvider(err error) bool {
 	_, ok := err.(*ErrUnknownProvider)
 	return ok

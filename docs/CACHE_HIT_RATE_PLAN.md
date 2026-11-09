@@ -99,38 +99,38 @@
 
 #### 1.3.1 `TokenUsage` 字段补全
 ```go
-// 文件：pkg/llm/types.go
-// 中文注释：DeepSeek API 响应中 usage 字段的标准映射
-//   - prompt_tokens = 总输入（含 cache 命中 + 未命中）
-//   - prompt_cache_hit_tokens = 命中部分（按缓存价计费）
-//   - prompt_cache_miss_tokens = 未命中部分（按原价计费）
-//   - 关系：prompt_tokens = prompt_cache_hit_tokens + prompt_cache_miss_tokens
-//   - 注意：dsh 原版 LlmFailure 在网络错误时返回的是估算值，需要在 retry 路径覆盖
+// File: pkg/llm/types.go
+// Standard mapping of the DeepSeek API usage response.
+//   - prompt_tokens: total input, including cache hits and misses.
+//   - prompt_cache_hit_tokens: cached input billed at the cache rate.
+//   - prompt_cache_miss_tokens: uncached input billed at the full rate.
+//   - prompt_tokens = prompt_cache_hit_tokens + prompt_cache_miss_tokens.
+//   - Upstream LlmFailure estimates usage on network errors; override it on retry.
 type TokenUsage struct {
-    InputTokens          int `json:"input_tokens"`           // 未缓存输入（不计算 cache）
+    InputTokens          int `json:"input_tokens"`           // Uncached input tokens.
     OutputTokens         int `json:"output_tokens"`
     TotalTokens          int `json:"total_tokens,omitempty"`
-    CacheReadTokens      int `json:"cache_read_tokens,omitempty"`   // 命中（dsh 字段名）
-    CacheWriteTokens     int `json:"cache_write_tokens,omitempty"`  // 写入（dsh 字段名）
+    CacheReadTokens      int `json:"cache_read_tokens,omitempty"`   // Cache hits, using the upstream field name.
+    CacheWriteTokens     int `json:"cache_write_tokens,omitempty"`  // Cache writes, using the upstream field name.
     ReasoningTokens      int `json:"reasoning_tokens,omitempty"`
     
-    // ↓↓↓ 新增：DeepSeek 原生字段（用于缓存命中率精确计算）↓↓↓
-    PromptCacheHitTokens  int `json:"prompt_cache_hit_tokens,omitempty"`   // DeepSeek 原生
-    PromptCacheMissTokens int `json:"prompt_cache_miss_tokens,omitempty"`  // DeepSeek 原生
+    // Native DeepSeek fields for precise cache-hit accounting.
+    PromptCacheHitTokens  int `json:"prompt_cache_hit_tokens,omitempty"`   // Native DeepSeek field.
+    PromptCacheMissTokens int `json:"prompt_cache_miss_tokens,omitempty"`  // Native DeepSeek field.
 }
 ```
 
 #### 1.3.2 `CacheStats` 探针结构
 ```go
-// 文件：pkg/llm/tokenmeter.go
-// 中文注释：单次请求的缓存命中率快照，供阶段 6 E2E 测试断言使用
+// File: pkg/llm/tokenmeter.go
+// Per-request cache-hit snapshot for phase 6 end-to-end assertions.
 //   - HitRatio = PromptCacheHitTokens / (PromptCacheHitTokens + PromptCacheMissTokens)
-//   - 注意：PromptTokens 总量可能为 0（如纯系统消息请求），此时 HitRatio 强制为 1.0（防 NaN）
+//   - If PromptTokens is zero, use HitRatio=1.0 to avoid NaN.
 type CacheStats struct {
-    RequestSeq          int       // session 内第几个 turn
+    RequestSeq          int       // Turn index within the session.
     Model               string
-    PromptCacheHit      int       // DeepSeek 返回值
-    PromptCacheMiss     int       // DeepSeek 返回值
+    PromptCacheHit      int       // Value returned by DeepSeek.
+    PromptCacheMiss     int       // Value returned by DeepSeek.
     HitRatio            float64   // 0.0 ~ 1.0
     SessionID           SessionID
     TurnID              TurnID
@@ -140,7 +140,7 @@ type CacheStats struct {
 func (c *CacheStats) ComputeHitRatio() float64 {
     total := c.PromptCacheHit + c.PromptCacheMiss
     if total == 0 {
-        return 1.0  // 无 prompt 时不视为"未命中"
+        return 1.0  // An empty prompt is not treated as a cache miss.
     }
     return float64(c.PromptCacheHit) / float64(total)
 }
@@ -148,11 +148,11 @@ func (c *CacheStats) ComputeHitRatio() float64 {
 
 #### 1.3.3 DeepSeek 客户端解析
 ```go
-// 文件：pkg/llm/provider/deepseek/client.go
-// 中文注释：DeepSeek API 响应 usage 字段映射
-//   - DeepSeek 文档：https://api-docs.deepseek.com/zh-cn/guides/kv_cache/
-//   - prompt_cache_hit_tokens / prompt_cache_miss_tokens 是 DeepSeek 特有字段
-//   - 原版 dsh 在 LlmFailure 处理路径中需要把这些字段单独保留（不与 inputTokens 合并）
+// File: pkg/llm/provider/deepseek/client.go
+// Map DeepSeek API usage fields.
+//   - Documentation: https://api-docs.deepseek.com/zh-cn/guides/kv_cache/
+//   - prompt_cache_hit_tokens and prompt_cache_miss_tokens are DeepSeek-specific.
+//   - Preserve these fields separately in LlmFailure; do not merge them into inputTokens.
 func (c *Client) parseUsage(raw map[string]interface{}) TokenUsage {
     getInt := func(k string) int {
         v, ok := raw[k]
@@ -166,7 +166,7 @@ func (c *Client) parseUsage(raw map[string]interface{}) TokenUsage {
     return TokenUsage{
         PromptCacheHitTokens:  getInt("prompt_cache_hit_tokens"),
         PromptCacheMissTokens: getInt("prompt_cache_miss_tokens"),
-        // 保留 dsh 原版的"未缓存输入 = total - cache"算法
+        // Preserve the upstream formula: uncached input = total input - cached input.
         InputTokens:  getInt("prompt_tokens") - getInt("prompt_cache_hit_tokens"),
         OutputTokens: getInt("completion_tokens"),
     }
@@ -175,10 +175,10 @@ func (c *Client) parseUsage(raw map[string]interface{}) TokenUsage {
 
 #### 1.3.4 Token Meter 增强
 ```go
-// 文件：pkg/llm/tokenmeter.go（增强 M34）
-// 中文注释：每次 LLM 调用结束后自动累加缓存探针
-//   - Measure() 接收 TokenUsage + SessionHeader 上下文，写入会话级累计
-//   - 累计数据落到 session telemetry ledger（S07）供阶段 7 看板消费
+// File: pkg/llm/tokenmeter.go (extends M34).
+// Accumulate cache-probe measurements after each LLM call.
+//   - Measure accepts TokenUsage and SessionHeader context for session totals.
+//   - Persist totals to the session telemetry ledger (S07) for phase 7 dashboards.
 func (m *TokenMeter) Measure(req LLMRequest, resp TokenUsage) (*TokenMeasurement, error) {
     measurement := &TokenMeasurement{
         CacheStats: CacheStats{
@@ -218,51 +218,51 @@ func (m *TokenMeter) Measure(req LLMRequest, resp TokenUsage) (*TokenMeasurement
 
 #### 2.3.1 fold 投影族纯化
 ```go
-// 文件：pkg/session/fold.go
-// 中文注释：所有 fold* 函数必须满足"纯函数"约束：
-//   1. 输入：events []SessionEvent（不可变）
-//   2. 输出：投影状态（不可变，建议使用 value type 而非 pointer）
-//   3. 不允许调用：Session.append()、EventBus.emit()、任何 IO
-//   4. 不允许读取：除 events 之外的任何外部状态
-//   5. 复杂度：O(N) 一次扫描，N = events 长度
-// 这是 D1 的核心保障：fold 永远不能"破"prefix cache，
-// 因为它根本不修改事件流。
+// File: pkg/session/fold.go
+// All fold functions must be pure:
+//   1. Input: immutable events []SessionEvent.
+//   2. Output: immutable projection state; prefer values over pointers.
+//   3. Do not call Session.append, EventBus.emit, or perform I/O.
+//   4. Do not read external state beyond events.
+//   5. Complexity: one O(N) scan, where N is the number of events.
+// This enforces D1: folding cannot invalidate the prefix cache
+// because it never modifies the event stream.
 func FoldPlanMode(events []SessionEvent) (active bool, pending bool) {
     var lastActive, lastPending bool
     for _, ev := range events {
         if ev.Type != EventPlanMode { continue }
         data, ok := ev.Data.(PlanModeData)
-        if !ok { continue }  // invariant 应当保证不会发生
+        if !ok { continue }  // The invariant should make this unreachable.
         lastActive = data.Active
         lastPending = data.Pending
     }
     return lastActive, lastPending
 }
 
-// 同模式：FoldGoal / FoldTodo / FoldRequestHeader / FoldEffectiveSandboxMode / 
+// Apply the same pattern to FoldGoal, FoldTodo, FoldRequestHeader, and FoldEffectiveSandboxMode.
 //        FoldEffectiveApprovalPolicy / FoldPermissionPreset
 ```
 
 #### 2.3.2 Session 写路径唯一性
 ```go
-// 文件：pkg/session/session.go
-// 中文注释：Session 仅暴露 append() 一个写路径
-//   - 所有 fold* 投影必须从 append 后的 events 派生
-//   - 禁止任何"重写历史"的 public/private 方法
-//   - 唯一允许"修改历史"的是 compaction，但必须通过 SurfaceOp 字段（见 2.3.3）
-// 这是 D1 的根本保障：除 compaction 外，没有任何方法能"破坏 append-only"。
+// File: pkg/session/session.go
+// Session exposes append as its only write path.
+//   - Derive all projections from the event list after append.
+//   - Do not expose public or private history-rewriting methods.
+//   - Compaction changes the visible history only through SurfaceOp (see 2.3.3).
+// D1: no operation may violate the append-only event log; compaction changes only its view.
 type Session struct {
-    events []SessionEvent  // 私有，外部只读
+    events []SessionEvent  // Private storage; external access is read-only.
     header SessionHeader
     mu     sync.RWMutex
 }
 
-// append() 是唯一写路径，返回新事件索引
+// append is the only write path and returns the new event index.
 func (s *Session) Append(ev SessionEvent) (int, error) {
     s.mu.Lock()
     defer s.mu.Unlock()
     
-    // invariant: seq 严格连续
+    // Invariant: sequence numbers are strictly consecutive.
     expectedSeq := len(s.events) + 1
     if ev.Seq != expectedSeq {
         return 0, &InvariantError{
@@ -272,7 +272,7 @@ func (s *Session) Append(ev SessionEvent) (int, error) {
         }
     }
     
-    // invariant: time 单调不减
+    // Invariant: timestamps never decrease.
     if len(s.events) > 0 && ev.Time < s.events[len(s.events)-1].Time {
         return 0, &InvariantError{
             Code: "TIME_NOT_MONOTONIC",
@@ -283,11 +283,11 @@ func (s *Session) Append(ev SessionEvent) (int, error) {
     return ev.Seq, nil
 }
 
-// 公开的"读"路径
+// Public read path.
 func (s *Session) Events() []SessionEvent {
     s.mu.RLock()
     defer s.mu.RUnlock()
-    // 返回深拷贝防止外部修改
+    // Return a deep copy to prevent external mutation.
     cp := make([]SessionEvent, len(s.events))
     copy(cp, s.events)
     return cp
@@ -296,29 +296,29 @@ func (s *Session) Events() []SessionEvent {
 
 #### 2.3.3 SurfaceOp 表面替换（compaction 唯一合法写历史方式）
 ```go
-// 文件：pkg/session/event_data.go
-// 中文注释：SurfaceOp 是 compaction 表面替换的不变量
-//   - 物理事件流：永远 append-only（seq 连续，time 单调）
-//   - 逻辑派生：deriveMessages() 读到 user/message 时，
-//     如果后续有 SurfaceOp{op:replace, start:ev.Seq, end:ev.Seq+5} 事件，
-//     就用 SurfaceOp.Data 替换原 5 条 user/assistant 消息
-//   - 不修改源事件，只是"读时"做表面替换
-//   - 这是 D1 的根本保证：compaction 不能"回写"破坏 prefix cache
+// File: pkg/session/event_data.go
+// SurfaceOp defines the invariants for compaction replacements.
+//   - Physical events stay append-only with consecutive sequences and monotonic time.
+//   - During logical derivation, when deriveMessages reads user/message,
+//     a later SurfaceOp{op:replace, start:ev.Seq, end:ev.Seq+5}
+//     replaces the covered user/assistant messages with SurfaceOp.Data.
+//   - Apply replacements only when reading; never mutate source events.
+//   - D1: compaction must not rewrite events and invalidate the prefix cache.
 type SurfaceOp struct {
     Op    string  // "replace"
-    Start int     // 起始 event.seq
-    End   int     // 结束 event.seq
-    Data  string  // 替换内容（如 LLM 生成的摘要）
+    Start int     // Starting event.seq.
+    End   int     // Ending event.seq.
+    Data  string  // Replacement content, such as an LLM-generated summary.
 }
 ```
 
 #### 2.3.4 不变量校验 8 条 day-1
 ```go
-// 文件：pkg/session/invariant.go（增强 M33）
-// 中文注释：M33 必做的 8 条不变量是 D1 的运行时护栏
-//   - 每条 Session.append() 都强制校验
-//   - 任何一条失败：抛 InvariantError + 拒绝 append
-//   - 同时登记到 invariant ledger（M33）便于审计
+// File: pkg/session/invariant.go (extends M33).
+// The eight M33 invariants are runtime guards for D1.
+//   - Validate every Session.append.
+//   - On failure, return InvariantError and reject the append.
+//   - Record failures in the M33 invariant ledger for auditing.
 var CoreInvariants = []Invariant{
     {
         Name: "seq_continuous",
@@ -357,7 +357,7 @@ var CoreInvariants = []Invariant{
                     }
                 }
             }
-            // depth 必须为 0（除非 interrupted 冷合成，由 crash recovery 处理）
+            // Depth must be zero, except for interrupted-state synthesis during crash recovery.
             if depth != 0 && !s.crashRecovered {
                 return fmt.Errorf("unpaired turn events: depth=%d", depth)
             }
@@ -401,25 +401,25 @@ var CoreInvariants = []Invariant{
 
 #### 3.3.1 Section 模板严格 copy
 ```go
-// 文件：pkg/sysprompt/sections/persona.go
-// 中文注释：必须 day-1 从 dsh 原版 package/core/system-prompt/src/sections/persona.ts
-//          严格拷贝文本（一字不差），包括：
-//   - 角色定义
-//   - 行为约束
-//   - 任何标点 / 换行 / 缩进
-// 严禁自由发挥 / 改写 / 翻译 / "优化"。
-// 这是 D2 的根本：原版 section 文本是"模型表现得像 DeepSeek"的灵魂。
+// File: pkg/sysprompt/sections/persona.go
+// Copy the upstream package/core/system-prompt/src/sections/persona.ts text exactly,
+// including all of the following:
+//   - Role definitions.
+//   - Behavioral constraints.
+//   - Punctuation, line breaks, and indentation.
+// Do not rewrite, translate, or otherwise modify the prompt text.
+// D2: the original section text preserves the intended DeepSeek behavior.
 const PersonaSection = `You are DeepSeek, a powerful AI assistant.
 ...（严格拷贝原版文本，此处省略约 200 行）...
 You must always respond in a way that is consistent with the above persona.`
 ```
 
 ```go
-// 文件：pkg/sysprompt/sections/plan_policy.go
-// 中文注释：Plan Mode section 严格拷贝 dsh 原版 plan/policy
-//   - order 必须是 500（与原版对齐）—— 改 order 会改变模型看到 section 的相对位置
-//   - 文本严格 copy —— 改一个词都可能让模型在 plan mode 下行为漂移
-const PlanPolicyOrder = 500  // ⚠️ 不要改这个数
+// File: pkg/sysprompt/sections/plan_policy.go
+// Copy the upstream plan/policy section exactly.
+//   - Keep order=500 to preserve the section's relative position in the prompt.
+//   - Copy text verbatim; even small changes may alter plan-mode behavior.
+const PlanPolicyOrder = 500  // Do not change this order value.
 
 const PlanPolicySection = `In plan mode, you should first output a detailed plan
 ...（严格拷贝原版 plan/policy 文本）...
@@ -428,24 +428,24 @@ Use the exit_plan_mode tool to submit your plan for user approval.`
 
 #### 3.3.2 order 常量写死 + 排序机制
 ```go
-// 文件：pkg/sysprompt/section.go
-// 中文注释：所有 section 的 order 必须用 Go 常量定义，编译期写死
-//   - Section.Order() 读 const 字段，运行时不能被覆盖
-//   - Assembler 排序按 Order 升序拼接
-//   - 关键 order 列表（与 dsh 原版对齐）：
+// File: pkg/sysprompt/section.go
+// Define section orders as compile-time Go constants.
+//   - Section.Order reads a constant and cannot be overridden at runtime.
+//   - The assembler concatenates sections in ascending order.
+//   - Required order values match the upstream implementation.
 //     - persona:    100
 //     - policy:     200
 //     - runtime_ctx: 300
 //     - plan_policy: 500
 //     - skill_catalog: 600
-//   - 严禁动态 order：plugin 不能注册"order=time.Now()"的 section
+//   - Plugins must not register dynamic orders such as time.Now().
 type Section interface {
     Name() string
-    Order() int       // 读 const 字段
-    Render(ctx Context) string  // 纯函数，禁止 IO / 随机数 / time.Now()
+    Order() int       // Return the constant order.
+    Render(ctx Context) string  // Pure function: no I/O, randomness, or time.Now().
 }
 
-// 排序保证
+// Enforce deterministic ordering.
 func (a *Assembler) Assemble(ctx Context) string {
     sections := a.registry.List()
     sort.SliceStable(sections, func(i, j int) bool {
@@ -462,23 +462,23 @@ func (a *Assembler) Assemble(ctx Context) string {
 
 #### 3.3.3 静态检测：禁插动态值
 ```go
-// 文件：pkg/sysprompt/static_check.go
-// 中文注释：编译期 + 运行时双层防御，禁插动态值
-//   - 静态：grep 扫描所有 .go 文件，禁出现以下模式：
+// File: pkg/sysprompt/static_check.go
+// Use static and runtime checks to reject dynamic prompt values.
+//   - Statically scan all Go files for the following patterns.
 //     - systemPrompt + "..." + time.Now()
 //     - systemPrompt + fmt.Sprintf(..., runtime.Cwd())
 //     - systemPrompt + randomValue()
-//   - 运行时：Section.Render() 接受 io.Writer + Recorder，
-//     如果检测到调用 time.Now() / os.Getwd() / math/rand 立即 panic
+//   - At runtime, Section.Render receives an io.Writer and Recorder.
+//     Panic immediately if time.Now, os.Getwd, or math/rand is called.
 //
-// 工具链集成：
+// Toolchain integration:
 //   - Makefile target: `make check-cache-safety`
-//   - CI 必跑，否则 merge 阻塞
+//   - Run in CI and block merging on failure.
 type PureSection interface {
     Render(ctx Context) string
 }
 
-// 运行时检测：通过 context.WithValue 注入 Recorder
+// Inject the runtime Recorder using context.WithValue.
 type contextKey string
 const recorderKey contextKey = "section-recorder"
 
@@ -487,7 +487,7 @@ func RenderWithDetection(p PureSection, ctx Context) (string, error) {
     ctx = context.WithValue(ctx, recorderKey, recorder)
     defer func() {
         if r := recover(); r != nil {
-            // 检测到非法调用
+            // An illegal call was detected.
             panic(&InvariantError{
                 Code: "SECTION_NOT_PURE",
                 Section: p.Name(),
@@ -500,15 +500,15 @@ func RenderWithDetection(p PureSection, ctx Context) (string, error) {
 ```
 
 ```bash
-# 文件：scripts/check-cache-safety.sh
-# 中文注释：CI 跑这个脚本，扫描 pkg/sysprompt/ 下所有 section 文件
-#   - grep 动态值模式
-#   - go vet 自定义 check
-#   - 必须 0 errors 才算通过
+# File: scripts/check-cache-safety.sh
+# CI scans all section files under pkg/sysprompt/.
+#   - Search for dynamic-value patterns.
+#   - Run the custom go vet check.
+#   - Require zero errors.
 #!/bin/bash
 set -e
 
-# 1. 扫描动态 API 调用
+# 1. Scan for dynamic API calls.
 forbidden_patterns=(
     "time\.Now()"
     "os\.Getwd()"
@@ -558,15 +558,15 @@ Skills `<available_skills>` 区块只在 catalog 变化时通过 `agent.inject()
 
 #### 4.3.1 catalog 内容稳定序列化
 ```go
-// 文件：pkg/skill/registry.go
-// 中文注释：catalog 文本必须稳定序列化，跨 session 跨进程一致
-//   1. 按 skill name 字典序排序
-//   2. 每个 skill 摘要：name + 固定 1 行 summary
-//   3. 字段分隔符固定（"|"）
-//   4. 严禁插入时间戳、可用性标记、动态状态
-//   5. 严禁字段顺序随机
+// File: pkg/skill/registry.go
+// Serialize catalog text deterministically across sessions and processes.
+//   1. Sort skills lexicographically by name.
+//   2. Include each skill's name and a fixed one-line summary.
+//   3. Use a fixed field separator: "|".
+//   4. Exclude timestamps, availability flags, and dynamic state.
+//   5. Never randomize field order.
 func (r *SkillRegistry) CatalogText() string {
-    summaries := r.ListSummaries()  // 内部已按 name 排序
+    summaries := r.ListSummaries()  // Already sorted by name.
     var sb strings.Builder
     sb.WriteString("<available_skills>\n")
     for _, s := range summaries {
@@ -582,12 +582,12 @@ func (r *SkillRegistry) CatalogText() string {
 
 #### 4.3.2 change-only 检测 + inject
 ```go
-// 文件：pkg/skill/tool.go
-// 中文注释：只在 catalog 内容变化时通过 agent.inject() 注入 user-message
-//   - 注入位置：在最后一次"user message"之后、"assistant message"之前
-//   - 注入内容：完整 catalog 文本（如上）
-//   - 不修改 system prompt（保持 system prefix 稳定）
-//   - agent.pre-step waterfall 中检测，diff 旧值 vs 新值
+// File: pkg/skill/tool.go
+// Inject a user message through agent.inject only when the catalog changes.
+//   - Insert after the latest user message and before the assistant message.
+//   - Include the full catalog text described above.
+//   - Leave the system prompt unchanged to preserve its prefix.
+//   - Compare old and new values in the agent.pre-step waterfall.
 type CatalogSnapshot struct {
     Hash      string  // SHA256(CatalogText())
     Text      string
@@ -599,10 +599,10 @@ func (s *SkillRegistry) MaybeInjectCatalog(agent Agent) bool {
     newHash := sha256.Sum256([]byte(newText))
     
     if s.lastSnapshot != nil && s.lastSnapshot.Hash == hex.EncodeToString(newHash[:]) {
-        return false  // 无变化，不注入
+        return false  // No change; do not inject.
     }
     
-    // 有变化：注入新 user-message
+    // Catalog changed; inject a new user message.
     s.lastSnapshot = &CatalogSnapshot{
         Hash: hex.EncodeToString(newHash[:]),
         Text: newText,
@@ -619,12 +619,12 @@ func (s *SkillRegistry) MaybeInjectCatalog(agent Agent) bool {
 
 #### 4.3.3 fsnotify 实时刷新 + 缓存失效
 ```go
-// 文件：pkg/skill/provider_fs.go
-// 中文注释：fsnotify 监听技能目录，文件变更后失效缓存
-//   - 监听 rank 100~600 的 6 层目录
-//   - Windows 平台用 polling fallback（Go fsnotify 在 Windows 上有 bug）
-//   - 任何变化触发 registry 全量 rescan + CatalogText 重算
-//   - 上层 MaybeInjectCatalog 检测到 hash 变化后自动 inject
+// File: pkg/skill/provider_fs.go
+// Watch skill directories with fsnotify and invalidate the cache on file changes.
+//   - Watch all six directory layers with ranks 100 through 600.
+//   - Use polling as the Windows fallback for filesystem-watcher limitations.
+//   - Rescan the registry and recompute CatalogText after each change.
+//   - MaybeInjectCatalog injects automatically when the hash changes.
 func (p *LocalFilesystemProvider) watch(ctx context.Context) {
     watcher, _ := fsnotify.NewWatcher()
     for _, dir := range p.scanRoots() {
@@ -635,7 +635,7 @@ func (p *LocalFilesystemProvider) watch(ctx context.Context) {
         case ev := <-watcher.Events:
             if ev.Op&(fsnotify.Create|fsnotify.Write|fsnotify.Remove) != 0 {
                 p.invalidateCache()
-                // 触发 agent.pre-step 重新跑 MaybeInjectCatalog
+                // Rerun MaybeInjectCatalog during agent.pre-step.
             }
         case <-ctx.Done():
             return
@@ -672,18 +672,18 @@ func (p *LocalFilesystemProvider) watch(ctx context.Context) {
 
 #### 5.3.1 PromptContext 注册表
 ```go
-// 文件：pkg/sysprompt/context.go
-// 中文注释：PromptContext 是动态上下文的注册中心
-//   - 与 PromptSection 并行注册，区别：
-//     Section → system prompt 前缀（静态）
-//     Context → user-msg 追加在历史末尾（动态，change-only 持久化）
-//   - 每个 context 有一个 hash，hash 变化时才注入新 user-msg
-//   - hash 不变时不注入（节省 token + 保持 prefix 稳定）
+// File: pkg/sysprompt/context.go
+// PromptContext registers dynamic context providers.
+//   - Register alongside PromptSection, with different destinations:
+//     Section: static system-prompt prefix.
+//     Context: dynamic user messages appended to history and persisted only on change.
+//   - Hash each context and inject a new user message only when its hash changes.
+//   - Unchanged hashes avoid extra tokens and preserve the prompt prefix.
 type PromptContext struct {
     Name string
-    Order int  // 多个 context 之间的相对顺序
-    Compute func(s *Session) string  // 纯函数，输入 session 状态
-    LastHash string  // 内部状态
+    Order int  // Relative order among context providers.
+    Compute func(s *Session) string  // Pure function taking session state as input.
+    LastHash string  // Internal state.
 }
 
 func (a *Assembler) RenderContexts(s *Session) []UserMessage {
@@ -699,7 +699,7 @@ func (a *Assembler) RenderContexts(s *Session) []UserMessage {
         hashStr := hex.EncodeToString(h[:])
         
         if ctx.LastHash == hashStr {
-            continue  // 无变化，不注入
+            continue  // No change; do not inject.
         }
         ctx.LastHash = hashStr
         
@@ -715,11 +715,11 @@ func (a *Assembler) RenderContexts(s *Session) []UserMessage {
 
 #### 5.3.2 各种动态 context 实现
 ```go
-// 文件：pkg/sysprompt/sections/runtime_ctx.go
-// 中文注释：runtime context 提供当前 plan/goal/approval/sandbox 状态
-//   - 内容是 markdown 表格，纯文本，无随机
-//   - 每次 session 状态变化时 hash 变化 → 注入新 user-msg
-//   - 注意：CWD 走"date-level"静态提示 + get_cwd 工具，不写 time.Now()
+// File: pkg/sysprompt/sections/runtime_ctx.go
+// Runtime context exposes current plan, goal, approval, and sandbox state.
+//   - Render a deterministic plain-text Markdown table.
+//   - A session-state change updates the hash and injects a new user message.
+//   - Use date-level static hints and get_cwd for CWD; do not insert time.Now().
 var RuntimeContextOrder = 300
 
 var RuntimeContext = PromptContext{
@@ -751,14 +751,14 @@ var RuntimeContext = PromptContext{
 
 #### 5.3.3 Goal Round Driver 续轮提示
 ```go
-// 文件：pkg/goal/round_driver.go
-// 中文注释：goal-round-driver 订阅 turn-stopping 事件
-//   - 当 goal.active 且 roundsStarted < maxGoalRounds 时
-//   - 注入 <goal-round> 续轮提示作为 user-msg（不是 system prompt）
-//   - 这样 goal 内容变化时只破当前这一段，前面的历史仍命中
+// File: pkg/goal/round_driver.go
+// The goal round driver subscribes to turn-stopping events.
+//   - When the goal is active and roundsStarted < maxGoalRounds,
+//   - inject a <goal-round> continuation as a user message, not a system prompt.
+//   - Goal updates then change only the suffix, preserving cached history.
 var GoalRoundContext = PromptContext{
     Name: "goal-round",
-    Order: 400,  // 在 runtime context 之后
+    Order: 400,  // Place after runtime context.
     Compute: func(s *Session) string {
         goals := FoldGoal(s.Events())
         var sb strings.Builder
@@ -779,13 +779,13 @@ var GoalRoundContext = PromptContext{
 
 #### 5.3.4 Compaction 保留最后 snapshot
 ```go
-// 文件：pkg/compaction/engine.go
-// 中文注释：compaction 必须保留最后一次完整 PromptContext snapshot
-//   - 原因：context 是动态状态，comp 删多了模型会"忘记"当前模式/goal
-//   - 实现：compaction 算法选 range 时，**强制保留最后一条 context-msg**
-//   - 同时保留最近 N 轮的 user/assistant（普通对话可裁，context 不可裁）
+// File: pkg/compaction/engine.go
+// Compaction must preserve the most recent complete PromptContext snapshot.
+//   - Otherwise the model may lose the current dynamic mode or goal.
+//   - Always retain the latest context message when selecting a compaction range.
+//   - Also retain the latest N user/assistant rounds; context cannot be discarded.
 func (e *BasicEngine) SelectCompactionRange(events []SessionEvent) (start, end int) {
-    // 找到最后一条 Context 消息的 seq
+    // Find the last context message's sequence number.
     lastContextSeq := 0
     for _, ev := range events {
         if ev.Type == EventUserMessage {
@@ -796,8 +796,8 @@ func (e *BasicEngine) SelectCompactionRange(events []SessionEvent) (start, end i
         }
     }
     
-    // 范围 = [0, lastContextSeq-1]
-    // 即：从最早开始裁，但保留 lastContextSeq 之后所有内容
+    // Range: [0, lastContextSeq-1].
+    // Compact the oldest events while retaining everything from lastContextSeq onward.
     return 0, lastContextSeq - 1
 }
 ```
@@ -832,47 +832,47 @@ func (e *BasicEngine) SelectCompactionRange(events []SessionEvent) (start, end i
 
 #### 6.3.1 反模式 1 防御：禁插时间戳到 system prompt
 ```go
-// 文件：pkg/sysprompt/static_check.go（阶段 2 已实现）
-// 中文注释：见 3.3.3，此处不再重复
-//   - 静态扫描 + 运行时 Recorder 双层
-//   - 任何 time.Now() / os.Getwd() / rand 调用都被捕获
+// File: pkg/sysprompt/static_check.go (implemented in phase 2).
+// See section 3.3.3 for details.
+//   - Combine static scanning with the runtime Recorder.
+//   - Detect all time.Now, os.Getwd, and random-number calls.
 ```
 
 #### 6.3.2 反模式 2 防御：compaction SurfaceOp
 ```go
-// 文件：pkg/session/session.go
-// 中文注释：Session 暴露的写路径仅 append()，不允许 Replace()
-//   - 唯一允许"修改历史"的是 SurfaceOp
-//   - 但 SurfaceOp 是"读时替换"，物理事件流不变
-//   - 这保证 compaction 后事件 seq 仍连续、time 仍单调
+// File: pkg/session/session.go
+// Session exposes append as its only write path; Replace is not allowed.
+//   - SurfaceOp is the only mechanism for changing the visible history.
+//   - It applies replacements at read time without changing physical events.
+//   - Compaction therefore preserves consecutive sequences and monotonic timestamps.
 //
-// ❌ 错误：暴露 Replace(seq, newEvent) public 方法
-// ✅ 正确：compaction 流程只追加 compaction/* 事件 + SurfaceOp
+// Incorrect: expose a public Replace(seq, newEvent) method.
+// Correct: append compaction events with SurfaceOp metadata.
 type CompactionEngine interface {
     Compact(ctx context.Context, s *Session, opts CompactOptions) error
-    // Compact 内部只允许调用 s.Append()，不允许任何 in-place 修改
+    // Compact may call only s.Append; never mutate events in place.
 }
 ```
 
 #### 6.3.3 反模式 3 防御：JSON Schema 序列化定序
 ```go
-// 文件：pkg/tools/schema.go
-// 中文注释：ValueSchemaSpec DSL 编译为 JSON Schema 时必须字典序输出
-//   1. properties 字段按 key 字典序
-//   2. required 字段按字典序
-//   3. enum 值按字典序
-//   4. 严禁 map[string]interface{} 直接 JSON.Marshal（Go map 顺序随机）
+// File: pkg/tools/schema.go
+// Compile ValueSchemaSpec into JSON Schema with deterministic ordering.
+//   1. Sort properties lexicographically by key.
+//   2. Sort required fields lexicographically.
+//   3. Sort enum values lexicographically.
+//   4. Do not rely on Go map iteration order when constructing JSON output.
 //
-// 实现：所有 Schema 编译为固定顺序的 json.RawMessage
+// Compile schemas into json.RawMessage with a fixed field order.
 func compileToJSONSchema(spec ValueSchemaSpec) json.RawMessage {
-    // 1. 排序 properties
+    // 1. Sort properties.
     keys := make([]string, 0, len(spec.Properties))
     for k := range spec.Properties {
         keys = append(keys, k)
     }
     sort.Strings(keys)
     
-    // 2. 按排序后顺序构造 json.RawMessage
+    // 2. Construct json.RawMessage in sorted order.
     var buf bytes.Buffer
     buf.WriteString(`{"type":"object","properties":{`)
     for i, k := range keys {
@@ -882,7 +882,7 @@ func compileToJSONSchema(spec ValueSchemaSpec) json.RawMessage {
     }
     buf.WriteString(`}`)
     
-    // 3. required 排序
+    // 3. Sort required fields.
     required := append([]string{}, spec.Required...)
     sort.Strings(required)
     if len(required) > 0 {
@@ -897,18 +897,18 @@ func compileToJSONSchema(spec ValueSchemaSpec) json.RawMessage {
 
 #### 6.3.4 反模式 4 防御：Tool 注册排序
 ```go
-// 文件：pkg/tools/registry.go
-// 中文注释：ToolRegistry 暴露的工具列表必须按 name 字典序返回
-//   - 序列化到 system prompt 的 tool 列表按此顺序
-//   - 增删工具后顺序不变（仅当 name 稳定）
-//   - 严禁按注册顺序返回（map 迭代随机）
+// File: pkg/tools/registry.go
+// ToolRegistry returns tools sorted lexicographically by name.
+//   - Use this order when serializing tools into the system prompt.
+//   - Adding or removing tools preserves the relative order of stable names.
+//   - Do not use registration order or nondeterministic map iteration order.
 func (r *ToolRegistry) List() []ToolDefinition {
-    tools := r.all()  // 内部 map
+    tools := r.all()  // Internal map.
     names := make([]string, 0, len(tools))
     for name := range tools {
         names = append(names, name)
     }
-    sort.Strings(names)  // 字典序
+    sort.Strings(names)  // Lexicographic order.
     
     result := make([]ToolDefinition, len(names))
     for i, name := range names {
@@ -920,11 +920,11 @@ func (r *ToolRegistry) List() []ToolDefinition {
 
 #### 6.3.5 自定义 lint 工具
 ```go
-// 文件：internal/lint/cache_safety.go
-// 中文注释：go vet 自定义 check，扫描整个 pkg/ 目录
-//   - 检测所有"已知会破缓存"的 API 调用模式
-//   - 提供 IDE 集成（VSCode golangci-lint）
-//   - 集成到 CI
+// File: internal/lint/cache_safety.go
+// Custom go vet check scanning the entire pkg directory.
+//   - Detect known API patterns that invalidate the cache.
+//   - Support IDE integration through VSCode and golangci-lint.
+//   - Run in CI.
 package lint
 
 import (
@@ -947,7 +947,7 @@ func run(pass *analysis.Pass) (any, error) {
             sel, ok := call.Fun.(*ast.SelectorExpr)
             if !ok { return true }
             
-            // 检测：pkg/sysprompt/ 下文件调用 time.Now() / os.Getwd()
+            // Detect time.Now and os.Getwd calls under pkg/sysprompt/.
             if isInPkg(pass, file, "pkg/sysprompt/sections") {
                 if isCallTo(sel, "time", "Now") {
                     pass.Reportf(call.Pos(), 
@@ -959,10 +959,10 @@ func run(pass *analysis.Pass) (any, error) {
                 }
             }
             
-            // 检测：pkg/tools/schema.go 直接用 json.Marshal(map)
+            // Detect direct json.Marshal(map) calls in pkg/tools/schema.go.
             if isInPkg(pass, file, "pkg/tools") {
                 if isCallTo(sel, "json", "Marshal") {
-                    // 检查参数是否是 map
+                    // Check whether the argument is a map.
                     if len(call.Args) > 0 {
                         if _, isMap := call.Args[0].(*ast.CompositeLit); isMap {
                             pass.Reportf(call.Pos(),
@@ -980,8 +980,8 @@ func run(pass *analysis.Pass) (any, error) {
 ```
 
 ```bash
-# 文件：Makefile
-# 中文注释：CI 必跑 cache-safety 检查
+# File: Makefile
+# CI must run cache-safety checks.
 .PHONY: check-cache-safety
 check-cache-safety:
     go vet -vettool=$(which cache_safety_lint) ./pkg/...
@@ -1013,11 +1013,11 @@ check-cache-safety:
 
 #### 7.3.1 测试基础设施
 ```go
-// 文件：tests/testutil/deepseek_mock.go
-// 中文注释：Mock DeepSeek API 服务器
-//   - 实现"prefix cache 模拟"：跟踪每次请求的 prompt hash，hit 时返回 hit_tokens
-//   - 模拟"切 preset 后 cache 失效"：preset 变化时丢弃所有缓存
-//   - 模拟"compaction 后恢复"：检测到 surface replacement 时重新建立 cache
+// File: tests/testutil/deepseek_mock.go
+// Mock DeepSeek API server.
+//   - Simulate prefix caching by tracking prompt hashes and returning hit_tokens.
+//   - Clear cached state when the preset changes.
+//   - Rebuild cache state after a surface replacement to simulate compaction recovery.
 type MockDeepSeekServer struct {
     cachedPrefixes map[string]int  // hash → cached token count
     currentPreset  string
@@ -1031,22 +1031,22 @@ func (m *MockDeepSeekServer) HandleChat(w http.ResponseWriter, r *http.Request) 
     m.mu.Lock()
     defer m.mu.Unlock()
     
-    // 计算 prompt hash
+    // Compute the prompt hash.
     promptText := serializeMessages(req.Messages)
     hash := sha256.Sum256([]byte(promptText))
     hashStr := hex.EncodeToString(hash[:])
     
-    // 检查是否命中
+    // Check for a cache hit.
     hitTokens, ok := m.cachedPrefixes[hashStr]
     if !ok {
-        // 模拟服务端的"落盘"逻辑
+        // Simulate server-side persistence.
         m.cachedPrefixes[hashStr] = countTokens(promptText)
         hitTokens = 0
     }
     
     missTokens := countTokens(promptText) - hitTokens
     
-    // 返回 SSE 响应
+    // Return an SSE response.
     w.Header().Set("Content-Type", "text/event-stream")
     fmt.Fprintf(w, "data: {\"usage\":{\"prompt_tokens\":%d,\"prompt_cache_hit_tokens\":%d,\"prompt_cache_miss_tokens\":%d,\"completion_tokens\":50}}\n\n",
         countTokens(promptText), hitTokens, missTokens)
@@ -1057,11 +1057,11 @@ func (m *MockDeepSeekServer) HandleChat(w http.ResponseWriter, r *http.Request) 
 
 #### 7.3.2 E2E 测试 1：50 轮稳定率 ≥ 95%
 ```go
-// 文件：tests/cache_hit_rate_e2e_test.go
-// 中文注释：50 轮对话，验证平均命中率 ≥ 95%
-//   - 每个 user message 后采样一次 CacheStats
-//   - 计算 50 次的平均 HitRatio
-//   - 必须 ≥ 0.95
+// File: tests/cache_hit_rate_e2e_test.go
+// Verify an average cache-hit ratio of at least 95% over 50 turns.
+//   - Sample CacheStats after each user message.
+//   - Average the 50 HitRatio measurements.
+//   - Require a ratio of at least 0.95.
 func TestE2E_50Turns_StableHitRate(t *testing.T) {
     if testing.Short() { t.Skip("e2e") }
     
@@ -1093,10 +1093,10 @@ func TestE2E_50Turns_StableHitRate(t *testing.T) {
 
 #### 7.3.3 E2E 测试 2：切 preset 验证
 ```go
-// 中文注释：切换 agent preset 后，命中率从 0 恢复
+// Verify that cache hits recover after changing the agent preset.
 //   - Round 1-20: standard preset
-//   - Round 21-40: 切到 minimal preset（系统 prompt 改变）→ 命中率预期为 0
-//   - Round 41-60: 仍 minimal → 命中率应稳定上升
+//   - Rounds 21-40: switch to minimal; the changed system prompt initially misses.
+//   - Rounds 41-60: retain minimal; the hit ratio should increase steadily.
 func TestE2E_PresetSwitch_CacheInvalidates(t *testing.T) {
     mock := testsutil.NewMockDeepSeekServer()
     defer mock.Close()
@@ -1111,26 +1111,26 @@ func TestE2E_PresetSwitch_CacheInvalidates(t *testing.T) {
     // Switch preset
     agent.SwitchPreset("minimal")
     
-    // Phase 2: minimal, 期望前几轮命中率低
+    // Phase 2: expect low initial hit ratios after switching to minimal.
     for i := 0; i < 5; i++ {
         result, _ := agent.Run(ctx, fmt.Sprintf("msg %d", i))
         require.Less(t, result.CacheStats.HitRatio, 0.5,
             "切换 preset 后第 %d 轮命中率应 < 50%%", i)
     }
     
-    // Phase 3: minimal 稳定
+    // Phase 3: keep minimal stable.
     for i := 0; i < 15; i++ {
         result, _ := agent.Run(ctx, fmt.Sprintf("msg %d", i))
     }
-    // 最后 5 轮平均应 ≥ 80%
+    // The final five rounds should average at least 80%.
 }
 ```
 
 #### 7.3.4 E2E 测试 3：compaction 后恢复
 ```go
-// 中文注释：100 轮 + 中途一次 compaction
-//   - 验证 compaction 不破坏 prefix
-//   - 验证最后一次 context snapshot 保留
+// Run 100 turns with one compaction midway through.
+//   - Verify that compaction preserves the prefix.
+//   - Verify retention of the latest context snapshot.
 func TestE2E_CompactionHitRateRecovery(t *testing.T) {
     mock := testsutil.NewMockDeepSeekServer()
     defer mock.Close()
@@ -1138,17 +1138,17 @@ func TestE2E_CompactionHitRateRecovery(t *testing.T) {
     agent := omnix.NewAgent(omnix.Config{...})
     sessionID := agent.NewSession()
     
-    // Round 1-50: 稳定命中
+    // Rounds 1-50: stable cache hits.
     for i := 0; i < 50; i++ {
         agent.RunOnSession(ctx, sessionID, fmt.Sprintf("msg %d", i))
     }
     
-    // 触发 compaction
+    // Trigger compaction.
     agent.CompactSession(ctx, sessionID, omnix.CompactOptions{
         Strategy: "pressure",
     })
     
-    // Round 51-100: 命中率应在 30 轮内恢复到 ≥ 95%
+    // Rounds 51-100: recover to at least 95% within 30 rounds.
     var recoveredAt int = -1
     for i := 50; i < 100; i++ {
         result, _ := agent.RunOnSession(ctx, sessionID, fmt.Sprintf("msg %d", i))
@@ -1164,9 +1164,9 @@ func TestE2E_CompactionHitRateRecovery(t *testing.T) {
 
 #### 7.3.5 E2E 测试 4：多 session 并发
 ```go
-// 中文注释：10 个并发 session 互不干扰
-//   - 每个 session 独立命中自己的 cache
-//   - 验证 prompt_cache_key 或 session 隔离机制
+// Verify that ten concurrent sessions do not interfere with each other.
+//   - Each session uses its own cache.
+//   - Validate prompt_cache_key or the session-isolation mechanism.
 func TestE2E_MultiSession_NoInterference(t *testing.T) {
     mock := testsutil.NewMockDeepSeekServer()
     defer mock.Close()
@@ -1187,7 +1187,7 @@ func TestE2E_MultiSession_NoInterference(t *testing.T) {
     }
     wg.Wait()
     
-    // 每个 session 单独看，平均命中率应 ≥ 95%
+    // Each session should independently average at least 95% cache hits.
     for idx, ratios := range results {
         avg := average(ratios)
         require.GreaterOrEqual(t, avg, 0.85, 
@@ -1198,14 +1198,14 @@ func TestE2E_MultiSession_NoInterference(t *testing.T) {
 
 #### 7.3.6 E2E 测试 5：加工具 vs 不加工具
 ```go
-// 中文注释：5/10/20 个工具场景下，命中率应不下降
-//   - 验证 tool schema 序列化定序 + 工具名排序
+// Verify stable hit ratios with 5, 10, and 20 tools.
+//   - Validate deterministic schema serialization and tool-name ordering.
 func TestE2E_ToolCount_HitRateStable(t *testing.T) {
     for _, toolCount := range []int{5, 10, 20} {
         mock := testsutil.NewMockDeepSeekServer()
         defer mock.Close()
         
-        tools := generateTools(toolCount)  // 工具 name 字典序排列
+        tools := generateTools(toolCount)  // Sort tools lexicographically by name.
         agent := omnix.NewAgent(omnix.Config{Tools: tools})
         
         var hitRatios []float64
@@ -1249,13 +1249,13 @@ func TestE2E_ToolCount_HitRateStable(t *testing.T) {
 
 #### 8.3.1 OTel 探针导出
 ```go
-// 文件：internal/telemetry/cache_metrics.go
-// 中文注释：每次 LLM 请求后导出 OTel 指标
-//   - omnix.cache.hit_ratio: Histogram（按 session/preset/turn 维度）
+// File: internal/telemetry/cache_metrics.go
+// Export OpenTelemetry metrics after each LLM request.
+//   - omnix.cache.hit_ratio: histogram grouped by session, preset, and turn.
 //   - omnix.cache.hit_tokens: Counter
 //   - omnix.cache.miss_tokens: Counter
-//   - omnix.cache.broken_count: Counter（检测到破缓存时 +1）
-//   - 标签：session.id, agent.preset, model, turn.seq
+//   - omnix.cache.broken_count: counter incremented on cache invalidation.
+//   - Labels: session.id, agent.preset, model, turn.seq.
 import (
     "go.opentelemetry.io/otel/metric"
 )
@@ -1272,7 +1272,7 @@ func init() {
     cacheHitRatio, err = otel.Meter.Float64Histogram("omnix.cache.hit_ratio",
         metric.WithDescription("每次 LLM 请求的 prefix cache 命中率"),
     )
-    // ... 初始化其他指标
+    // Initialize the remaining metrics.
 }
 
 func RecordCacheStats(stats CacheStats) {
@@ -1288,14 +1288,14 @@ func RecordCacheStats(stats CacheStats) {
 
 #### 8.3.2 破窗告警
 ```go
-// 文件：internal/telemetry/cache_alert.go
-// 中文注释：检测"破缓存"事件并告警
-//   - 单次命中率突降 > 30% → 触发 warn 日志
-//   - 连续 5 次命中率 < 50% → 触发 error 日志 + 可选 webhook
-//   - 检测到"已知破缓存模式"（如 schema 字段顺序变化）→ 直接 error
+// File: internal/telemetry/cache_alert.go
+// Detect cache-invalidation events and emit alerts.
+//   - Warn when a single-request hit ratio drops by more than 30%.
+//   - Log an error and optionally call a webhook after five ratios below 50%.
+//   - Immediately report known invalidation patterns, such as reordered schema fields.
 type CacheAlert struct {
-    threshold       float64  // 默认 0.5
-    consecutiveFails int     // 默认 5
+    threshold       float64  // Default: 0.5.
+    consecutiveFails int     // Default: 5.
 }
 
 func (a *CacheAlert) Check(stats CacheStats, history []CacheStats) {
@@ -1316,11 +1316,11 @@ func (a *CacheAlert) Check(stats CacheStats, history []CacheStats) {
 
 #### 8.3.3 Grafana 看板
 ```yaml
-# 文件：deploy/grafana/omnix-cache-dashboard.json
-# 中文注释：Grafana 看板 JSON 定义
-#   - 主面板：近 24h 平均命中率（按 preset 拆分）
-#   - 副面板：命中率分布直方图
-#   - 告警面板：近 1h 破窗事件
+# File: deploy/grafana/omnix-cache-dashboard.json
+# Grafana dashboard JSON definition.
+#   - Main panel: average hit ratio over 24 hours, grouped by preset.
+#   - Secondary panel: hit-ratio distribution histogram.
+#   - Alert panel: cache-invalidation events in the past hour.
 {
   "panels": [
     {

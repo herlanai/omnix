@@ -1,34 +1,21 @@
-// 本文件对应任务 H04：Session 派生增量 Fold（每次 Append 只对新事件做 fold，
-// 不从头 replay 全量历史；10k 事件场景 CPU 下降 90%）。
-//
-// 思路：
-//   - 在 SessionLog.Append → 只把「新事件」喂给 IncrementalFolder；
-//   - 每类投影（Messages/RequestHeader/Goal/Todo/...）提供纯增量 Apply(state, ev)；
-//   - 唯一麻烦：SurfaceOp.Replace 会使历史事件对派生不可见（即
-//     `ev.Seq ∈ [start,end]` 的旧消息应被删除）。增量态很难反向撤销旧消息的贡献，
-//     因此当遇到 SurfaceReplace 时置位 `messagesDirty` + 记录最高被替换的 Seq，
-//     在下次「读 Messages」这一投影时做一次选择性重放（只重放该投影），其它
-//     投影照常增量跑。Goal/Todo/Preset/Header 这类 latest-wins 投影天然对
-//     SurfaceReplace 免疫（它们对所有事件按 last-write-wins，被替换事件即便
-//     可见也不影响结果，因为 SurfaceOp 只替换 message/assistant 相关事件）。
-//   - 对外 API：
-//       · NewIncrementalFolder() / FolderFromEvents()
-//       · Append(ev) / AppendMany(evs)  —— 增量消费
-//       · Snapshot() SessionProjection   —— 读取最新态（懒重建 dirty）
-//       · FullRebuild(events)            —— 与 FoldAll 做一致性校验
-//   - 语义保证：Folder.Snapshot() == FoldAll(events_so_far)，对 H04 使用方透明。
+// This file implements incremental session projections (H04). Append applies
+// only the new event rather than replaying history. Each projection has a pure
+// Apply operation. Surface replacement marks messages dirty because prior
+// contributions cannot be cheaply undone; the next message snapshot rebuilds
+// that projection while metadata projections remain incremental.
+// NewIncrementalFolder and FolderFromEvents initialize state; Append/AppendMany
+// consume events; Snapshot lazily rebuilds messages; FullRebuild supports
+// consistency checks against FoldAll.
 package session
 
 import (
-	"reflect"
+	"slices"
 	"sync"
 )
 
-// ============================================================================
-// (A) 给所有 fold 状态补 Equal 方法（Projections 接口 + H04 增量变更判断复用）
-// ============================================================================
+// Projection equality supports registry updates and incremental change detection.
 
-// Equal 实现 ProjectionState 接口。
+// Equal implements ProjectionState.
 func (m Message) Equal(o ProjectionState) bool {
 	other, ok := o.(Message)
 	if !ok {
@@ -40,7 +27,7 @@ func (m Message) Equal(o ProjectionState) bool {
 		strSliceEq(m.ToolCallIDs, other.ToolCallIDs)
 }
 
-// messageSliceEq 工具：比较两个 Message slice 值相同。
+// messageSliceEq compares message slices by value.
 func messageSliceEq(a, b []Message) bool {
 	if len(a) != len(b) {
 		return false
@@ -53,7 +40,7 @@ func messageSliceEq(a, b []Message) bool {
 	return true
 }
 
-// Equal 工具：string slice。
+// strSliceEq compares string slices by value.
 func strSliceEq(a, b []string) bool {
 	if len(a) != len(b) {
 		return false
@@ -66,7 +53,7 @@ func strSliceEq(a, b []string) bool {
 	return true
 }
 
-// Equal 对 RequestHeaderFold。
+// Equal compares request-header projections.
 func (r RequestHeaderFold) Equal(o ProjectionState) bool {
 	other, ok := o.(RequestHeaderFold)
 	if !ok {
@@ -78,7 +65,7 @@ func (r RequestHeaderFold) Equal(o ProjectionState) bool {
 		r.ToolCount == other.ToolCount
 }
 
-// Equal 对 EffectiveSandboxMode。
+// Equal compares effective sandbox modes.
 func (s EffectiveSandboxMode) Equal(o ProjectionState) bool {
 	other, ok := o.(EffectiveSandboxMode)
 	if !ok {
@@ -88,7 +75,7 @@ func (s EffectiveSandboxMode) Equal(o ProjectionState) bool {
 		s.Enforced == other.Enforced && s.Root == other.Root
 }
 
-// Equal 对 EffectiveApprovalPolicy。
+// Equal compares effective approval policies.
 func (a EffectiveApprovalPolicy) Equal(o ProjectionState) bool {
 	other, ok := o.(EffectiveApprovalPolicy)
 	if !ok {
@@ -97,7 +84,7 @@ func (a EffectiveApprovalPolicy) Equal(o ProjectionState) bool {
 	return a.Present == other.Present && a.Policy == other.Policy && a.Source == other.Source
 }
 
-// Equal 对 PermissionPresetFold。
+// Equal compares permission-preset projections.
 func (p PermissionPresetFold) Equal(o ProjectionState) bool {
 	other, ok := o.(PermissionPresetFold)
 	if !ok {
@@ -106,7 +93,7 @@ func (p PermissionPresetFold) Equal(o ProjectionState) bool {
 	return p.Present == other.Present && p.Preset == other.Preset
 }
 
-// Equal 对 GoalFold。
+// Equal compares goal projections.
 func (g GoalFold) Equal(o ProjectionState) bool {
 	other, ok := o.(GoalFold)
 	if !ok {
@@ -120,7 +107,7 @@ func (g GoalFold) Equal(o ProjectionState) bool {
 		g.Revision != other.Revision {
 		return false
 	}
-	// BlockReason 指针比较（R06）。
+	// Compare optional BlockReason values (R06).
 	if (g.BlockReason == nil) != (other.BlockReason == nil) {
 		return false
 	}
@@ -133,7 +120,7 @@ func (g GoalFold) Equal(o ProjectionState) bool {
 	return true
 }
 
-// Equal 对 TodoFold。
+// Equal compares todo projections.
 func (t TodoFold) Equal(o ProjectionState) bool {
 	other, ok := o.(TodoFold)
 	if !ok {
@@ -142,10 +129,10 @@ func (t TodoFold) Equal(o ProjectionState) bool {
 	if t.Present != other.Present {
 		return false
 	}
-	return strSliceEq(t.Items, other.Items)
+	return strSliceEq(t.Items, other.Items) && slices.Equal(t.Entries, other.Entries)
 }
 
-// Equal 对 PlanModeFold。
+// Equal compares plan-mode projections.
 func (p PlanModeFold) Equal(o ProjectionState) bool {
 	other, ok := o.(PlanModeFold)
 	if !ok {
@@ -154,7 +141,7 @@ func (p PlanModeFold) Equal(o ProjectionState) bool {
 	return p.Present == other.Present && p.Mode == other.Mode
 }
 
-// Equal 对 SessionTitleFold。
+// Equal compares session-title projections.
 func (s SessionTitleFold) Equal(o ProjectionState) bool {
 	other, ok := o.(SessionTitleFold)
 	if !ok {
@@ -163,7 +150,7 @@ func (s SessionTitleFold) Equal(o ProjectionState) bool {
 	return s.Present == other.Present && s.Title == other.Title
 }
 
-// SessionProjectionEqual 便捷：聚合结构 Equal 比较（测试一致性用）。
+// SessionProjectionEqual compares aggregate projections for consistency checks.
 func SessionProjectionEqual(a, b SessionProjection) bool {
 	return messageSliceEq(a.Messages, b.Messages) &&
 		a.RequestHeader.Equal(b.RequestHeader) &&
@@ -176,14 +163,11 @@ func SessionProjectionEqual(a, b SessionProjection) bool {
 		a.Title.Equal(b.Title)
 }
 
-// ============================================================================
-// (B) 每个投影的 Apply(state, ev) 增量函数
-// ============================================================================
+// Incremental Apply operations for each projection.
 
-// ApplyMessage 增量追加一条事件到 Message 列表。
-// 对 SurfaceReplace：不在这里反向移除（难以撤销），而是由 Folder 层置 dirty。
-// 返回 (newMessages, replaced bool)，replaced=true 表示发生了 SurfaceReplace，
-// 调用方需要把 messages 置 dirty。
+// ApplyMessage appends a message event and reports whether SurfaceReplace
+// occurred. It does not remove replaced history; callers must mark messages
+// dirty and rebuild them when necessary.
 func ApplyMessage(msgs []Message, ev SessionEvent) ([]Message, bool) {
 	dirty := false
 	if ev.SurfaceOp != nil && ev.SurfaceOp.Op == SurfaceReplace {
@@ -207,7 +191,7 @@ func ApplyMessage(msgs []Message, ev SessionEvent) ([]Message, bool) {
 	return msgs, dirty
 }
 
-// ApplyRequestHeader latest-wins。
+// ApplyRequestHeader keeps the latest request header.
 func ApplyRequestHeader(s RequestHeaderFold, ev SessionEvent) RequestHeaderFold {
 	if ev.Type != EventRequestHeader {
 		return s
@@ -223,7 +207,7 @@ func ApplyRequestHeader(s RequestHeaderFold, ev SessionEvent) RequestHeaderFold 
 	return s
 }
 
-// ApplyPermissionPreset latest-wins。
+// ApplyPermissionPreset keeps the latest permission preset.
 func ApplyPermissionPreset(s PermissionPresetFold, ev SessionEvent) PermissionPresetFold {
 	if ev.Type != EventPresetChange {
 		return s
@@ -234,7 +218,7 @@ func ApplyPermissionPreset(s PermissionPresetFold, ev SessionEvent) PermissionPr
 	return s
 }
 
-// ApplyGoalChange revision 单调递增 latest-wins（CAS 语义）。
+// ApplyGoalChange applies strictly increasing revisions with latest-wins CAS semantics.
 func ApplyGoalChange(s GoalFold, ev SessionEvent) GoalFold {
 	if ev.Type != EventGoalChange {
 		return s
@@ -255,7 +239,7 @@ func ApplyGoalChange(s GoalFold, ev SessionEvent) GoalFold {
 	return s
 }
 
-// ApplyTodoWrite latest-wins（整体替换）。
+// ApplyTodoWrite replaces the todo state with the latest complete value.
 func ApplyTodoWrite(s TodoFold, ev SessionEvent) TodoFold {
 	if ev.Type != EventTodoWrite {
 		return s
@@ -270,7 +254,7 @@ func ApplyTodoWrite(s TodoFold, ev SessionEvent) TodoFold {
 	return s
 }
 
-// ApplyPlanMode latest-wins。
+// ApplyPlanMode keeps the latest plan mode.
 func ApplyPlanMode(s PlanModeFold, ev SessionEvent) PlanModeFold {
 	if ev.Type != EventPlanMode {
 		return s
@@ -281,7 +265,7 @@ func ApplyPlanMode(s PlanModeFold, ev SessionEvent) PlanModeFold {
 	return s
 }
 
-// ApplySessionTitle latest-wins。
+// ApplySessionTitle keeps the latest session title.
 func ApplySessionTitle(s SessionTitleFold, ev SessionEvent) SessionTitleFold {
 	if ev.Type != EventSessionTitle {
 		return s
@@ -292,7 +276,7 @@ func ApplySessionTitle(s SessionTitleFold, ev SessionEvent) SessionTitleFold {
 	return s
 }
 
-// deriveSandboxAndApproval 将最新 Preset 推导为 SandboxMode + ApprovalPolicy（H04 每步 ApplyPermissionPreset 后调用即可，O(1)）。
+// deriveSandboxAndApproval derives policy from the latest preset using constant-time lookups.
 func deriveSandboxAndApproval(preset PermissionPresetFold) (EffectiveSandboxMode, EffectiveApprovalPolicy) {
 	if !preset.Present {
 		return EffectiveSandboxMode{}, EffectiveApprovalPolicy{}
@@ -309,60 +293,51 @@ func deriveSandboxAndApproval(preset PermissionPresetFold) (EffectiveSandboxMode
 		EffectiveApprovalPolicy{Present: true, Policy: policy, Source: "preset"}
 }
 
-// ============================================================================
-// (C) IncrementalFolder：H04 主入口
-// ============================================================================
+// IncrementalFolder is the H04 entry point.
 
-// IncrementalFolder 是 SessionProjection 的增量维护器。
-//
-// 典型用法：
-//    f := NewIncrementalFolder()
-//    f.Append(ev1)
-//    f.Append(ev2)
-//    snap := f.Snapshot(events)    // events 仅当 messages dirty 时才会读；否则 0 拷贝
-//
-// 并发：Folder 本身 **不带锁**（H07 单写多读由上层保证）；如果需要并发读写，
-// 调用方使用外部 mutex。SessionLog.Append 本就持 sl.mu，天然单写。
+// IncrementalFolder maintains SessionProjection incrementally. Create a folder,
+// Append events, then call Snapshot(events); history is read when messages
+// are dirty. Projection state is not internally synchronized: callers must
+// serialize access, as SessionLog.Append does under its mutex.
 type IncrementalFolder struct {
-	// 增量快照
-	messages     []Message
-	reqHeader    RequestHeaderFold
-	preset       PermissionPresetFold
-	sandbox      EffectiveSandboxMode
-	approval     EffectiveApprovalPolicy
-	goal         GoalFold
-	todo         TodoFold
-	planMode     PlanModeFold
-	title        SessionTitleFold
+	// Incremental projection state.
+	messages  []Message
+	reqHeader RequestHeaderFold
+	preset    PermissionPresetFold
+	sandbox   EffectiveSandboxMode
+	approval  EffectiveApprovalPolicy
+	goal      GoalFold
+	todo      TodoFold
+	planMode  PlanModeFold
+	title     SessionTitleFold
 
-	// dirty 位：仅 messages 受 SurfaceReplace 影响。
+	// Only message projections are invalidated by surface replacement.
 	messagesDirty bool
 
-	// 统计：便于上层观测 H04 效果（Benchmark + 测试）。
+	// Statistics support H04 monitoring and benchmarks.
 	Stats FolderStats
 
-	// mu：保护 Folder.Stats 的原子计数器，可选。
+	// statsMu protects statistics access.
 	statsMu sync.Mutex
 }
 
-// FolderStats H04 性能统计（便于观测 / Benchmark）。
+// FolderStats exposes H04 performance counters.
 type FolderStats struct {
-	// IncrementalAppends 总增量 Append 次数。
+	// IncrementalAppends counts incremental appends.
 	IncrementalAppends uint64 `json:"incrementalAppends"`
-	// DirtyRebuilds 因 SurfaceReplace 触发的 messages 全量重建次数。
+	// DirtyRebuilds counts message rebuilds caused by surface replacement.
 	DirtyRebuilds uint64 `json:"dirtyRebuilds"`
-	// EventsScanned 总 scan 的事件数（增量=每次 1，dirty 重建=全部 events）。
+	// EventsScanned counts one per incremental event and all events during a rebuild.
 	EventsScanned uint64 `json:"eventsScanned"`
 }
 
-// NewIncrementalFolder 创建空的增量 folder（zero-state）。
+// NewIncrementalFolder creates empty projection state.
 func NewIncrementalFolder() *IncrementalFolder {
 	return &IncrementalFolder{}
 }
 
-// FolderFromEvents 用全量事件初始化 IncrementalFolder：先做一次性 FoldAll 建立 baseline，
-// 再把 Append 起点设为 len(events)。等价但更快：后续 Append 走增量。
-// 同时保证 FolderFromEvents(evs).Snapshot(evs) == FoldAll(evs)。
+// FolderFromEvents initializes a baseline with FoldAll, then supports
+// incremental appends. Its initial snapshot matches FoldAll(events).
 func FolderFromEvents(events []SessionEvent) *IncrementalFolder {
 	f := NewIncrementalFolder()
 	proj := FoldAll(events)
@@ -375,14 +350,14 @@ func FolderFromEvents(events []SessionEvent) *IncrementalFolder {
 	f.todo = proj.Todo
 	f.planMode = proj.PlanMode
 	f.title = proj.Title
-	// 记录：baseline 建立时消耗 len(events) scan，后续不再。
+	// Count events scanned to establish the baseline.
 	f.statsMu.Lock()
 	f.Stats.EventsScanned += uint64(len(events))
 	f.statsMu.Unlock()
 	return f
 }
 
-// Append 增量应用一条事件。复杂度 O(1)（不含 SurfaceReplace → 只是打 dirty 标记）。
+// Append applies one event incrementally; surface replacement only marks messages dirty.
 func (f *IncrementalFolder) Append(ev SessionEvent) {
 	var dirty bool
 	f.messages, dirty = ApplyMessage(f.messages, ev)
@@ -393,8 +368,8 @@ func (f *IncrementalFolder) Append(ev SessionEvent) {
 
 	oldPreset := f.preset
 	f.preset = ApplyPermissionPreset(f.preset, ev)
-	// preset 改变 → 重新派生沙箱/审批（O(1) 查表）。
-	if !reflect.DeepEqual(oldPreset, f.preset) {
+	// A changed preset updates sandbox and approval through constant-time lookups.
+	if oldPreset != f.preset {
 		f.sandbox, f.approval = deriveSandboxAndApproval(f.preset)
 	}
 
@@ -409,38 +384,34 @@ func (f *IncrementalFolder) Append(ev SessionEvent) {
 	f.statsMu.Unlock()
 }
 
-// AppendMany 批量增量（等价多次 Append 但统计一次锁）。
+// AppendMany applies a batch through successive Append calls.
 func (f *IncrementalFolder) AppendMany(evs []SessionEvent) {
 	for _, ev := range evs {
 		f.Append(ev)
 	}
 }
 
-// Snapshot 返回当前聚合投影。
-// 当 messagesDirty=true 时会调用 FoldAll(events).Messages 做一次重建（仅 messages 投影），
-// 其它 8 个投影直接复用增量快照。这是 H04 的"懒重建"：
-//   - 如果写路径从未 SurfaceReplace（90% 会话），永远不会触发重建；
-//   - 即便触发，也只在 Snapshot 被调用时发生，不是每 Append。
-//
-// 默认对 Messages 做防御拷贝（调用方修改返回 slice 不影响内部态），这在 10k messages
-// 的场景会有 ~100us 开销。如调用方只关心非 Messages 投影（Goal/Todo/PlanMode 等），
-// 请使用 SnapshotMeta()，速度提升 1~2 数量级。
+// Snapshot returns the aggregate projection. Dirty messages are lazily rebuilt
+// on reading, while metadata reuses incremental state. Without replacements
+// no rebuild occurs. The message slice is copied, but nested slices and pointers
+// remain shared and must be treated as read-only. Use SnapshotMeta on hot paths
+// that only need metadata to avoid copying the message slice.
 func (f *IncrementalFolder) Snapshot(events []SessionEvent) SessionProjection {
 	return f.snapshot(events, true)
 }
 
-// SnapshotMeta 返回不含 Messages 的轻量快照（Messages 永远 nil）。
-// 读取 Goal/Todo/Preset/Sandbox/Approval/PlanMode/Title/RequestHeader 专用。
-// 热路径每 Append 一次做决策应优先用这个接口以避免 Messages 大 slice 拷贝。
+// SnapshotMeta returns metadata only, with Messages always nil. Use it for
+// Goal, Todo, Preset, Sandbox, Approval, PlanMode, Title, and RequestHeader
+// when message copying would add unnecessary hot-path work.
 func (f *IncrementalFolder) SnapshotMeta(events []SessionEvent) SessionProjection {
 	return f.snapshot(events, false)
 }
 
-// snapshot 公共实现。copyMessages=true 时对 Messages 做防御拷贝。
+// snapshot shares implementation; copyMessages requests defensive message copies.
 func (f *IncrementalFolder) snapshot(events []SessionEvent, copyMessages bool) SessionProjection {
 	messages := f.messages
 	if f.messagesDirty {
-		// 仅重建 messages：使用 EffectiveEvents + deriveMessages。
+		// Rebuild only messages through deriveMessages and EffectiveEvents.
 		messages = deriveMessages(events)
 		f.messagesDirty = false
 		f.messages = messages
@@ -465,7 +436,7 @@ func (f *IncrementalFolder) snapshot(events []SessionEvent, copyMessages bool) S
 	return p
 }
 
-// FullRebuild 从全量事件强制重算（不使用 dirty 短路径），用于测试一致性。
+// FullRebuild recomputes all projections for consistency testing, bypassing dirty shortcuts.
 func (f *IncrementalFolder) FullRebuild(events []SessionEvent) SessionProjection {
 	proj := FoldAll(events)
 	f.messages = proj.Messages
@@ -481,29 +452,22 @@ func (f *IncrementalFolder) FullRebuild(events []SessionEvent) SessionProjection
 	return proj
 }
 
-// StatsCopy 返回当前统计副本（线程安全）。
+// StatsCopy returns a synchronized statistics snapshot.
 func (f *IncrementalFolder) StatsCopy() FolderStats {
 	f.statsMu.Lock()
 	defer f.statsMu.Unlock()
 	return f.Stats
 }
 
-// MarkDirty 显式把 messages 标记为 dirty（调试 / 上层明确知道历史被 compaction 修改时用）。
+// MarkDirty explicitly invalidates messages after known history compaction or for debugging.
 func (f *IncrementalFolder) MarkDirty() { f.messagesDirty = true }
 
-// ============================================================================
-// (D) SessionLog 挂钩：每 Append 自动更新内部 IncrementalFolder，
-//     上层直接 sl.Projection() 拿增量派生状态，不再 FoldAllFromLog O(n)。
-// ============================================================================
+// SessionLog hooks update IncrementalFolder on append so callers can read
+// projections without repeatedly folding the complete log.
 
-// 注意：为不侵入 SessionLog 已有结构，这里用"可选装饰器 + 显式挂钩"姿势。
-// SessionLog 内嵌（或聚合）一个 *IncrementalFolder，默认 nil；
-// 当调用 sl.EnableIncrementalProjection() 后启用：
-//   - sl.Append 成功 → 立刻 folder.Append(ev)；
-//   - sl.SlowProjection() 返回快照；
-// 调用方不 Enable 的话，原有行为不变（向后兼容）。
+// Incremental projections are optional. EnableIncrementalProjection initializes
+// the folder; successful appends update it immediately. Callers that do not
+// enable it retain the existing projection behavior.
 
-// 在 SessionLog 结构的字段里加 `folder *IncrementalFolder`，由 session.go 的
-// EnableIncrementalProjection 初始化。此处仅给出 helper，实际嵌入在 session.go。
-//
-// 如果需要从已有 SessionLog 冷启动（已经 Append 过 N 条），下面的 helper 走 FolderFromEvents：
+// SessionLog owns the optional folder and initializes it in session.go.
+// Existing logs establish their baseline through FolderFromEvents.

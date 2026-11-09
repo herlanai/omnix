@@ -1,5 +1,5 @@
-// admission.go 复刻官方 attachment/admission 的上传准入：解码 base64 载荷时拒绝
-// 非规范形式（解码后再编码必须与原串一致），防止同一字节的多种编码绕过校验。
+// Upload admission matches attachment/admission: base64 must round-trip to the
+// identical encoding so alternate representations cannot bypass validation.
 package attachment
 
 import (
@@ -7,10 +7,10 @@ import (
 	"errors"
 )
 
-// ErrInvalidBase64 载荷为空或不是规范 base64。
+// ErrInvalidBase64 indicates an empty or noncanonical base64 payload.
 var ErrInvalidBase64 = errors.New("attachment: image upload is not canonical base64")
 
-// DecodeCanonicalBase64 解码并校验规范 base64；非规范返回 ErrInvalidBase64。
+// DecodeCanonicalBase64 decodes canonical base64 or returns ErrInvalidBase64.
 func DecodeCanonicalBase64(data string) ([]byte, error) {
 	if data == "" {
 		return nil, ErrInvalidBase64

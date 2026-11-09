@@ -1,89 +1,87 @@
-// Package coderuntime 定义代码执行缝（Code Execution Seam）的协议层抽象。
+// Package coderuntime defines the code-execution protocol from packages/code-runtime.
+// In PTC mode a model writes a TS/Python program that calls host capabilities
+// through injected namespaces such as tools. Runtime executes that program.
 //
-// 对齐上游 packages/code-runtime：PTC 模式让模型写一段程序（TS/Python），程序通过
-// 注入的命名空间（如 tools）调用宿主能力。CodeRuntime 就是"执行这段程序"的缝。
-//
-// 重要取舍：上游唯一发布的后端是 worker-thread（Node 工作线程执行 TypeScript）。
-// Go 进程内没有 JS 引擎，因此本包只固化**协议契约**（请求/结果/失败分类 + 接口），
-// 不提供具体语言引擎。具体后端由使用方实现 CodeRuntime 接口——可以是外部子进程、
-// 嵌入式解释器，或远程执行服务。这样 PTC 的上层语义（run_code 桥、子调度记录）
-// 可以完整复刻，而执行后端保持可替换。
+// The upstream worker-thread backend executes TypeScript in Node. This package
+// provides only requests, results, failure types, and interfaces, not a language
+// engine. Implementations may use subprocesses, embedded interpreters, or remote
+// services while preserving run_code and child-dispatch semantics.
 package coderuntime
 
 import "context"
 
-// BindingFunction 是暴露给程序的一个宿主异步函数。
-// 运行时可能跨序列化边界桥接调用，因此入参参与解析值必须是无损 JSON。
-// 该函数的拒绝会在程序内表现为对应调用的 rejection。
+// BindingFunction is an asynchronous host function exposed to a program.
+// Arguments and resolved results must be lossless JSON across serialization
+// boundaries. Failure appears as rejection of the corresponding program call.
 type BindingFunction func(ctx context.Context, args any) (any, error)
 
-// BindingNamespace 是运行时暴露给程序的一个命名全局对象（如 tools）。
+// BindingNamespace is a named global object exposed to the program, such as tools.
 type BindingNamespace struct {
-	// Global 程序看到的全局标识（可移植标识符 [A-Za-z_][A-Za-z0-9_]*）。
+	// Global is a portable program identifier matching [A-Za-z_][A-Za-z0-9_]*.
 	Global string
-	// Functions 成员函数，键为程序调用的确切名字。
+	// Functions maps exact program-visible member names to functions.
 	Functions map[string]BindingFunction
-	// ErrorClass 可选：该命名空间的类型化错误类名（程序内成员拒绝成为其实例）。
+	// ErrorClass optionally names the typed error class used for member rejections.
 	ErrorClass string
 }
 
-// FailureKind 是一次运行的失败分类（正交、彼此独立）。
+// FailureKind classifies independent execution failures.
 type FailureKind string
 
-// 失败分类枚举，对齐上游 CodeRunFailure.kind。
+// Failure kinds match upstream CodeRunFailure.kind.
 const (
-	// FailException 程序抛出或解析/转换失败。
+	// FailException indicates a thrown exception or parsing/transformation failure.
 	FailException FailureKind = "exception"
-	// FailTimeout 实现拥有的预算到期。
+	// FailTimeout indicates expiration of an implementation-owned budget.
 	FailTimeout FailureKind = "timeout"
-	// FailAbort 请求的取消信号触发。
+	// FailAbort indicates cancellation of the request.
 	FailAbort FailureKind = "abort"
-	// FailWorkerExit 执行基质未结算即死亡（如 OOM）。
+	// FailWorkerExit indicates premature executor termination, such as OOM.
 	FailWorkerExit FailureKind = "worker-exit"
-	// FailInvalidOutput 完成值不是无损 JSON。
+	// FailInvalidOutput indicates a completion value that is not lossless JSON.
 	FailInvalidOutput FailureKind = "invalid-output"
-	// FailOutputLimit 序列化外层 logs/value/诊断超过上限。
+	// FailOutputLimit indicates serialized logs, values, or diagnostics exceed limits.
 	FailOutputLimit FailureKind = "output-limit"
 )
 
-// RunFailure 是一次运行的失败描述。
+// RunFailure describes an execution failure.
 type RunFailure struct {
-	// Kind 失败类别。
+	// Kind identifies the failure category.
 	Kind FailureKind
-	// Message 可读细节，适合回喂模型自我纠正。
+	// Message provides readable details suitable for model self-correction.
 	Message string
 }
 
-// RunRequest 是一次运行：程序源 + 运行时作用的一切。
+// RunRequest contains source code and its execution environment.
 type RunRequest struct {
-	// Program 程序源，以运行时语言编写，作为 async 函数体运行（顶层 await/return 可用）。
+	// Program is source executed as an async function body, allowing top-level await/return.
 	Program string
-	// Bindings 暴露给程序的宿主命名空间。
+	// Bindings exposes host namespaces to the program.
 	Bindings []BindingNamespace
-	// Ctx 取消运行：硬停止（即便在循环中），结果为 FailAbort。
+	// Ctx cancels execution, including loops, with a hard stop and FailAbort.
 	Ctx context.Context
 }
 
-// RunResult 是一次运行的结果。错误是结果的字段，而不是 Run 的 Go error——
-// 报告一个失败的程序是调用方的职责，不是异常路径。
+// RunResult reports program failure as data rather than a Go error from Run.
+// Reporting failed programs is part of normal caller handling.
 type RunResult struct {
-	// Value 程序完成值（顶层 return），失败或无值时为 nil。
+	// Value is the top-level return value, or nil on failure or absent output.
 	Value any
-	// Logs 程序按顺序输出的文本。
+	// Logs contains program output in order.
 	Logs []string
-	// Failure 非 nil 表示运行失败。
+	// Failure is nonnil when execution failed.
 	Failure *RunFailure
 }
 
-// Failed 便捷判定是否失败。
+// Failed reports whether execution failed.
 func (r *RunResult) Failed() bool { return r.Failure != nil }
 
-// Runtime 是代码执行缝接口：具体后端实现它。
+// Runtime is the interface implemented by code-execution backends.
 type Runtime interface {
-	// Language 源语言（小写标识，如 "typescript"/"python"），信息性而非门禁。
+	// Language is an informational lowercase source-language name, not an admission gate.
 	Language() string
-	// Isolation 执行基质（如 "worker-thread"/"process"/"container"），信息性。
+	// Isolation describes the executor, such as worker-thread, process, or container.
 	Isolation() string
-	// Run 执行一次程序并捕获输出；仅当缝契约被误用（而非程序失败）时返回 Go error。
+	// Run executes a program and captures output; Go errors indicate contract misuse only.
 	Run(req *RunRequest) (*RunResult, error)
 }

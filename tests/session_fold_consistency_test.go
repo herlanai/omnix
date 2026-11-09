@@ -1,4 +1,4 @@
-// 本文件对应任务 M05：Session 派生投影函数族（fold 一致性 + compaction replace）。
+// M05 projection-fold consistency and compaction replacement tests.
 package tests
 
 import (
@@ -10,46 +10,47 @@ import (
 	"github.com/herlanai/omnix/pkg/session"
 )
 
-// TestFoldHotVsReplay 验证 1k+ 事件下「热 append 维护」与「冷重放」fold 结果逐字段一致。
+// TestFoldHotVsReplay compares incremental maintenance and cold replay field by field over more
+// than 1000 events.
 func TestFoldHotVsReplay(t *testing.T) {
 	sl := session.NewSessionLog(brand.NewSessionID("fold_1"))
 
-	// 压入 1000+ 条混合事件（消息 + 状态变更）
+	// Append more than 1000 mixed message and state-change events.
 	const turns = 520
 	for i := 0; i < turns; i++ {
 		_, _ = sl.Append(session.UserMessageData{Content: "user msg"})
 		_, _ = sl.Append(session.AssistantMessageData{Content: "assistant msg"})
 	}
 
-	// 状态变更事件：确保各 fold 分支都被覆盖
+	// Cover every fold branch with state-change events.
 	_, _ = sl.Append(session.PresetChangeData{Preset: "safe"})
 	_, _ = sl.Append(session.GoalChangeData{GoalID: "g1", Phase: "active", Description: "do x", MaxRounds: 5, Revision: 1})
 	_, _ = sl.Append(session.TodoWriteData{Items: []string{"a", "b", "c"}})
 	_, _ = sl.Append(session.PlanModeData{Mode: "on"})
 	_, _ = sl.Append(session.SessionTitleData{Title: "My Session"})
 	_, _ = sl.Append(session.RequestHeaderData{ConfigEpoch: 2, SystemHash: "h", ToolCount: 3})
-	_, _ = sl.Append(session.PresetChangeData{Preset: "danger"}) // 覆盖 preset
+	_, _ = sl.Append(session.PresetChangeData{Preset: "danger"}) // Override the preset.
 
 	if sl.Len() < 1000 {
 		t.Fatalf("事件数不足 1000: %d", sl.Len())
 	}
 
-	// 热维护：随 append 逐步折叠，记录最终快照
+	// Maintain the hot projection after each append and retain its final snapshot.
 	var hot session.SessionProjection
 	events := sl.Events()
 	for i := 1; i <= len(events); i++ {
 		hot = session.FoldAll(events[:i])
 	}
 
-	// 冷重放：对完整事件列表一次性折叠
+	// Cold-replay the complete event list in one fold.
 	replay := session.FoldAll(events)
 
-	// 逐字段一致
+	// Compare every field.
 	if !reflect.DeepEqual(hot, replay) {
 		t.Fatalf("热/冷 fold 不一致\n热: %+v\n冷: %+v", hot, replay)
 	}
 
-	// 关键字段语义断言
+	// Assert key semantic values.
 	if len(replay.Messages) != turns*2 {
 		t.Fatalf("消息数 = %d, want %d", len(replay.Messages), turns*2)
 	}
@@ -79,9 +80,10 @@ func TestFoldHotVsReplay(t *testing.T) {
 	}
 }
 
-// TestDeriveMessagesAfterCompactionReplace 验证 compaction 表面替换后消息列表缩短且新消息正确。
+// TestDeriveMessagesAfterCompactionReplace verifies shortened history and correct replacement
+// messages.
 func TestDeriveMessagesAfterCompactionReplace(t *testing.T) {
-	// 手工构造事件序列：10 条消息（seq 1..10）+ 1 条替换事件（seq 11，覆盖 1..8）+ 1 条新消息（seq 12）
+	// Construct ten messages, a replacement at sequence 11, and a new message at sequence 12.
 	var events []session.SessionEvent
 	time := fixedTestTime()
 	for i := 1; i <= 10; i++ {
@@ -99,7 +101,7 @@ func TestDeriveMessagesAfterCompactionReplace(t *testing.T) {
 		events = append(events, session.SessionEvent{Seq: uint64(i), Time: time, Type: data.EventType(), Data: data})
 	}
 
-	// 替换事件：assistant/message 摘要，surfaceOp=replace [1,10]（覆盖全部旧消息）
+	// The assistant summary replaces the entire old range [1,10].
 	summary := session.AssistantMessageData{Content: "【压缩摘要】前 10 条消息"}
 	replaceEv := session.SessionEvent{
 		Seq:       11,
@@ -110,7 +112,7 @@ func TestDeriveMessagesAfterCompactionReplace(t *testing.T) {
 	}
 	events = append(events, replaceEv)
 
-	// 新消息
+	// New message.
 	events = append(events, session.SessionEvent{
 		Seq: 12, Time: time, Type: session.EventUserMessage,
 		Data: session.UserMessageData{Content: "新问题"},
@@ -118,7 +120,7 @@ func TestDeriveMessagesAfterCompactionReplace(t *testing.T) {
 
 	msgs := session.DeriveMessages(events)
 
-	// 期望：摘要 + 新消息（旧消息 seq 1..10 被隐藏，输出缩短）
+	// Expect only the summary and new message; sequences 1 through 10 are hidden.
 	if len(msgs) != 2 {
 		t.Fatalf("压缩后消息数 = %d, want 2（摘要+新消息）", len(msgs))
 	}
@@ -133,7 +135,7 @@ func TestDeriveMessagesAfterCompactionReplace(t *testing.T) {
 	}
 }
 
-// TestFoldDeterministicAcrossReplay 验证同一事件集多次 fold 输出完全一致（纯函数）。
+// TestFoldDeterministicAcrossReplay verifies pure, repeatable folding of identical events.
 func TestFoldDeterministicAcrossReplay(t *testing.T) {
 	sl := session.NewSessionLog(brand.NewSessionID("fold_2"))
 	_, _ = sl.Append(session.PresetChangeData{Preset: "review"})

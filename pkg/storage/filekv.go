@@ -1,4 +1,4 @@
-// 本文件实现 filekv 后端：基于文件系统的键值存储。
+// Filesystem-backed key-value storage.
 package storage
 
 import (
@@ -10,13 +10,13 @@ import (
 	"strings"
 )
 
-// FileKV 是基于文件系统的 Backend 实现。
-// 每个 key 对应 <root>/<key> 文件，内容为 {"version":N,"data":"<base64>"}。
+// FileKV implements Backend with files at <root>/<key> containing
+// {"version":N,"data":"<base64>"}.
 type FileKV struct {
 	root string
 }
 
-// NewFileKV 创建文件后端，root 为存储根目录（不存在则创建）。
+// NewFileKV creates a file backend and its root directory if needed.
 func NewFileKV(root string) (*FileKV, error) {
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		return nil, err
@@ -24,20 +24,20 @@ func NewFileKV(root string) (*FileKV, error) {
 	return &FileKV{root: root}, nil
 }
 
-// fileRecord 是磁盘上的单条记录。
+// fileRecord represents a stored record.
 type fileRecord struct {
 	Version uint64 `json:"version"`
 	Data    string `json:"data"` // base64
 }
 
-// keyPath 将 key 映射为安全文件路径（防目录穿越）。
+// keyPath maps a key to a safe path without directory traversal.
 func (f *FileKV) keyPath(key string) string {
-	// 将 key 中的分隔符替换，防止 "../" 穿越
+	// Replace separators to prevent ../ traversal.
 	safe := strings.ReplaceAll(key, "..", "_")
 	return filepath.Join(f.root, filepath.FromSlash(safe))
 }
 
-// Get 实现 Backend。
+// Get implements Backend.
 func (f *FileKV) Get(ctx context.Context, key string) ([]byte, uint64, error) {
 	path := f.keyPath(key)
 	raw, err := os.ReadFile(path)
@@ -58,7 +58,7 @@ func (f *FileKV) Get(ctx context.Context, key string) ([]byte, uint64, error) {
 	return data, rec.Version, nil
 }
 
-// Put 实现 Backend（CAS 语义）。
+// Put implements Backend with CAS.
 func (f *FileKV) Put(ctx context.Context, key string, data []byte, expectedVersion uint64) (uint64, error) {
 	path := f.keyPath(key)
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -70,7 +70,7 @@ func (f *FileKV) Put(ctx context.Context, key string, data []byte, expectedVersi
 		if !IsKeyNotFound(err) {
 			return 0, err
 		}
-		// key 不存在：仅允许 expectedVersion=0（新建）
+		// A missing key requires expectedVersion=0 for creation.
 		if expectedVersion != 0 {
 			return 0, &ErrCASMismatch{Key: key, ExpectedVersion: expectedVersion, ActualVersion: 0}
 		}
@@ -86,7 +86,7 @@ func (f *FileKV) Put(ctx context.Context, key string, data []byte, expectedVersi
 	if err != nil {
 		return 0, err
 	}
-	// 原子写：先写临时文件再重命名，避免半写状态
+	// Write a temporary file and rename it to avoid partial records.
 	tmp := path + ".tmp"
 	if err := os.WriteFile(tmp, raw, 0o644); err != nil {
 		return 0, err
@@ -97,7 +97,7 @@ func (f *FileKV) Put(ctx context.Context, key string, data []byte, expectedVersi
 	return expectedVersion + 1, nil
 }
 
-// Delete 实现 Backend。
+// Delete implements Backend.
 func (f *FileKV) Delete(ctx context.Context, key string) error {
 	path := f.keyPath(key)
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
@@ -106,7 +106,7 @@ func (f *FileKV) Delete(ctx context.Context, key string) error {
 	return nil
 }
 
-// List 实现 Backend：返回根目录下所有 key（相对路径，保持 key 分隔符）。
+// List returns keys under the root as relative paths, preserving key separators.
 func (f *FileKV) List(ctx context.Context, prefix string) ([]string, error) {
 	var keys []string
 	err := filepath.Walk(f.root, func(path string, info os.FileInfo, err error) error {

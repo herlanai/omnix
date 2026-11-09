@@ -1,17 +1,10 @@
-// Package fs 提供文件系统（Filesystem）接缝。
-//
-// 对齐上游：packages/fs/fs + fs-local + fs-observation-policy（M35）
-//
-// 本文件实现：FsTarget/FsVersion/FsInfo/FsEditRequest/FsWriteIntent 类型 + LocalFS 提供者
-// + 稳定错误码（FS_*）。观察策略见 policy.go。
-//
-// 设计要点：
-//   - resolve() 把用户路径解析成稳定身份 FsTarget（targetKey 不透明，displayPath 供展示）；
-//   - 版本令牌 FsVersion 由 stat 身份+新鲜度派生，作为 write/edit 的陈旧守卫；
-//   - writeText/editText 的 expected 是可选的守卫：省略则为无约束覆盖，提供则按意图校验
-//     （createIfAbsent / replaceIfVersion / 版本匹配）；
-//   - 所有失败用稳定 FsErrorCode（FS_NOT_FOUND / FS_STALE_VERSION / FS_NOT_OBSERVED /
-//     FS_AMBIGUOUS_EDIT / FS_EDIT_NOT_FOUND / FS_TOO_LARGE ...）。
+// Package fs implements the filesystem interface, matching fs/fs, fs-local, and
+// fs-observation-policy (M35). It defines targets, versions, metadata, edits, write
+// intents, LocalFS, and stable FS_* errors; observation rules are in policy.go.
+// Resolve produces an opaque stable target identity and a display path. Versions
+// derived from stat identity and freshness guard writes and edits. An omitted
+// expected value allows unconditional overwrite; supplied intents enforce
+// create-if-absent or version matching. All failures use stable FsErrorCode values.
 package fs
 
 import (
@@ -23,53 +16,51 @@ import (
 	"strings"
 )
 
-// ============================================================================
-// 类型
-// ============================================================================
+// Types.
 
-// FsTargetKey 是目标的不透明键（供陈旧守卫与查找）。
+// FsTargetKey is an opaque lookup and stale-write guard key.
 type FsTargetKey string
 
-// FsVersion 是不透明文件版本令牌（write/edit 守卫用）。
+// FsVersion is an opaque file-version token for write/edit guards.
 type FsVersion string
 
-// FsTarget 是后端解析后的稳定文件身份。
+// FsTarget is the stable file identity resolved by a backend.
 type FsTarget struct {
-	// TargetKey 不透明键（本地后端用规范化绝对路径）。
+	// TargetKey is opaque; the local backend uses a canonical absolute path.
 	TargetKey FsTargetKey
-	// DisplayPath 模型/UI 向展示路径。
+	// DisplayPath is the path shown to the model or UI.
 	DisplayPath string
 }
 
-// FsInfo 是 stat 返回的元数据（不含内容）。
+// FsInfo contains stat metadata without contents.
 type FsInfo struct {
-	// Version 当前新鲜度令牌。
+	// Version is the current freshness token.
 	Version FsVersion `json:"version"`
-	// Type 文件类型。
+	// Type identifies the file type.
 	Type string `json:"type"` // file / directory / other
-	// Size 常规文件字节数。
+	// Size is the regular-file size in bytes.
 	Size int64 `json:"size,omitempty"`
 }
 
-// FsEditRequest 是一次字面替换编辑请求。
+// FsEditRequest describes a literal text replacement.
 type FsEditRequest struct {
-	// OldString 要替换的非空字面文本。
+	// OldString is the nonempty literal text to replace.
 	OldString string
-	// NewString 替换文本；空串删除匹配文本。
+	// NewString replaces the match; empty deletes it.
 	NewString string
-	// ReplaceAll 替换所有匹配（而非要求恰好一个）。
+	// ReplaceAll replaces all matches instead of requiring exactly one.
 	ReplaceAll bool
 }
 
-// FsWriteIntent 是带守卫的写意图。
+// FsWriteIntent describes a guarded write.
 type FsWriteIntent struct {
-	// Kind：createIfAbsent 拒绝已存在；replaceIfVersion 按版本替换。
+	// Kind is createIfAbsent or replaceIfVersion.
 	Kind string
-	// Version replaceIfVersion 期望的版本。
+	// Version is the expected version for replaceIfVersion.
 	Version FsVersion
 }
 
-// FsWriteOutcome 是一次整文件写的结果。
+// FsWriteOutcome reports a whole-file write result.
 type FsWriteOutcome struct {
 	Operation string // create / update
 	Version   FsVersion
@@ -77,21 +68,19 @@ type FsWriteOutcome struct {
 	After     string
 }
 
-// FsEditOutcome 是一次字面编辑的结果。
+// FsEditOutcome reports a literal edit result.
 type FsEditOutcome struct {
 	Version FsVersion
 	Before  string
 	After   string
 }
 
-// ============================================================================
-// 稳定错误码
-// ============================================================================
+// Stable error codes.
 
-// FsErrorCode 是文件系统失败稳定码。
+// FsErrorCode is a stable filesystem failure code.
 type FsErrorCode string
 
-// 错误码枚举（对齐上游 FsErrorCode）。
+// Error codes aligned with upstream FsErrorCode.
 const (
 	FSErrNotFound       FsErrorCode = "FS_NOT_FOUND"
 	FSErrNotDirectory   FsErrorCode = "FS_NOT_DIRECTORY"
@@ -107,7 +96,7 @@ const (
 	FSErrEditNotFound   FsErrorCode = "FS_EDIT_NOT_FOUND"
 )
 
-// FsError 是携带稳定码的文件系统错误。
+// FsError carries a stable filesystem error code.
 type FsError struct {
 	Code FsErrorCode
 	Msg  string
@@ -119,7 +108,7 @@ func fsErr(code FsErrorCode, format string, args ...any) error {
 	return &FsError{Code: code, Msg: fmt.Sprintf(format, args...)}
 }
 
-// Code 返回错误码。
+// Code returns the error code.
 func Code(err error) FsErrorCode {
 	if err == nil {
 		return ""
@@ -130,22 +119,20 @@ func Code(err error) FsErrorCode {
 	return FSErrIO
 }
 
-// ============================================================================
-// 本地提供者
-// ============================================================================
+// Local provider.
 
-// LocalFS 是本地磁盘文件系统实现。
+// LocalFS implements a local disk filesystem.
 type LocalFS struct {
-	// Cwd 相对路径解析基准（可选）。
+	// Cwd optionally anchors relative-path resolution.
 	Cwd string
 }
 
-// NewLocal 创建本地文件系统。
+// NewLocal creates a local filesystem.
 func NewLocal(cwd string) *LocalFS {
 	return &LocalFS{Cwd: cwd}
 }
 
-// Resolve 把路径解析成稳定目标（相对路径按 Cwd 解析，跟随符号链接得规范绝对路径）。
+// Resolve resolves relative paths against Cwd and follows symlinks to a canonical target.
 func (l *LocalFS) Resolve(path string) (FsTarget, error) {
 	abs := path
 	if !filepath.IsAbs(abs) {
@@ -158,23 +145,23 @@ func (l *LocalFS) Resolve(path string) (FsTarget, error) {
 	if err != nil {
 		return FsTarget{}, fsErr(FSErrIO, "resolve %q: %v", path, err)
 	}
-	// resolve 跟随符号链接（realpath 语义由 EvalSymlinks 实现，允许失败则回退 Clean）。
+	// Follow symlinks with EvalSymlinks, falling back to Clean when resolution fails.
 	if rl, err := filepath.EvalSymlinks(real); err == nil {
 		real = filepath.Clean(rl)
 	}
 	return FsTarget{TargetKey: FsTargetKey(filepath.Clean(real)), DisplayPath: filepath.Clean(abs)}, nil
 }
 
-// ProcessPath 返回子进程可打开的目标规范绝对路径。
+// ProcessPath returns a canonical absolute path accessible to subprocesses.
 func (l *LocalFS) ProcessPath(t FsTarget) string { return string(t.TargetKey) }
 
-// FileURL 返回 file: URI。
+// FileURL returns a file URI.
 func (l *LocalFS) FileURL(t FsTarget) string {
 	p := filepath.ToSlash(string(t.TargetKey))
 	return "file://" + p
 }
 
-// Contains 判定 child 是 parent 或其后代（基于规范前缀）。
+// Contains checks whether child equals parent or lies beneath its canonical path.
 func (l *LocalFS) Contains(parent, child FsTarget) bool {
 	p := string(parent.TargetKey)
 	c := string(child.TargetKey)
@@ -184,7 +171,7 @@ func (l *LocalFS) Contains(parent, child FsTarget) bool {
 	return strings.HasPrefix(c, p+string(filepath.Separator))
 }
 
-// versionOf 由文件 stat 身份+新鲜度派生版本令牌。
+// versionOf derives a version token from stat identity and freshness.
 func versionOf(path string) (FsVersion, error) {
 	info, err := os.Stat(path)
 	if err != nil {
@@ -199,7 +186,7 @@ func versionOf(path string) (FsVersion, error) {
 	return FsVersion(fmt.Sprintf("%x", h.Sum(nil))[:16]), nil
 }
 
-// Stat 返回目标元数据；目标不存在返回 (nil, FS_NOT_FOUND)。
+// Stat returns metadata, or nil and FS_NOT_FOUND for a missing target.
 func (l *LocalFS) Stat(t FsTarget) (*FsInfo, error) {
 	path := string(t.TargetKey)
 	info, err := os.Stat(path)
@@ -220,7 +207,7 @@ func (l *LocalFS) Stat(t FsTarget) (*FsInfo, error) {
 	return &FsInfo{Version: v, Type: typ, Size: info.Size()}, nil
 }
 
-// ReadText 读取整文件 UTF-8 文本。
+// ReadText reads an entire file as UTF-8 text.
 func (l *LocalFS) ReadText(t FsTarget) (string, error) {
 	path := string(t.TargetKey)
 	data, err := os.ReadFile(path)
@@ -230,15 +217,15 @@ func (l *LocalFS) ReadText(t FsTarget) (string, error) {
 		}
 		return "", fsErr(FSErrIO, "read %q: %v", path, err)
 	}
-	// 简单校验可作 UTF-8（用 strings.ToValidUTF8 检测非法字节）。
+	// Detect invalid UTF-8 bytes with strings.ToValidUTF8.
 	if strings.ContainsRune(string(data), '\uFFFD') && !utf8Valid(data) {
 		return "", fsErr(FSErrNotText, "%q is not valid UTF-8 text", t.DisplayPath)
 	}
-	// LF 归一化（差异化基准）。
+	// Normalize line endings to LF for comparisons.
 	return normalizeLF(string(data)), nil
 }
 
-// ReadBytes 读取原始字节，超过 maxBytes 报 FS_TOO_LARGE。
+// ReadBytes reads raw bytes, returning FS_TOO_LARGE above maxBytes.
 func (l *LocalFS) ReadBytes(t FsTarget, maxBytes int) ([]byte, error) {
 	data, err := os.ReadFile(string(t.TargetKey))
 	if err != nil {
@@ -253,7 +240,7 @@ func (l *LocalFS) ReadBytes(t FsTarget, maxBytes int) ([]byte, error) {
 	return data, nil
 }
 
-// ListDir 列出目录直接子项（稳定名序，仅元数据）。
+// ListDir returns immediate children as metadata in stable name order.
 func (l *LocalFS) ListDir(t FsTarget) ([]FsDirEntry, error) {
 	entries, err := os.ReadDir(string(t.TargetKey))
 	if err != nil {
@@ -274,7 +261,7 @@ func (l *LocalFS) ListDir(t FsTarget) ([]FsDirEntry, error) {
 	return out, nil
 }
 
-// FsDirEntry 是目录直接子项。
+// FsDirEntry describes an immediate directory child.
 type FsDirEntry struct {
 	Name   string
 	Type   string
@@ -282,7 +269,7 @@ type FsDirEntry struct {
 	Size   int64
 }
 
-// WriteText 原子创建/替换文件；expected 提供守卫。
+// WriteText atomically creates or replaces a file with an optional expected guard.
 func (l *LocalFS) WriteText(t FsTarget, content string, expected *FsWriteIntent) (FsWriteOutcome, error) {
 	path := string(t.TargetKey)
 	_, statErr := os.Stat(path)
@@ -293,7 +280,7 @@ func (l *LocalFS) WriteText(t FsTarget, content string, expected *FsWriteIntent)
 		before = normalizeLF(string(b))
 	}
 
-	// 应用守卫。
+	// Apply the guard.
 	if expected != nil {
 		switch expected.Kind {
 		case "createIfAbsent":
@@ -312,7 +299,7 @@ func (l *LocalFS) WriteText(t FsTarget, content string, expected *FsWriteIntent)
 	}
 
 	after := normalizeLF(content)
-	// 原子写：写入临时文件后重命名。
+	// Publish atomically by writing a temporary file and renaming it.
 	if err := atomicWrite(path, after); err != nil {
 		return FsWriteOutcome{}, fsErr(FSErrIO, "write %q: %v", t.DisplayPath, err)
 	}
@@ -324,7 +311,7 @@ func (l *LocalFS) WriteText(t FsTarget, content string, expected *FsWriteIntent)
 	return FsWriteOutcome{Operation: op, Version: v, Before: before, After: after}, nil
 }
 
-// EditText 原子做字面替换编辑；expected 提供版本守卫（先验版本再匹配）。
+// EditText applies a literal replacement atomically, checking the expected version first.
 func (l *LocalFS) EditText(t FsTarget, edit FsEditRequest, expected *FsVersion) (FsEditOutcome, error) {
 	path := string(t.TargetKey)
 	if _, err := os.Stat(path); err != nil {
@@ -333,7 +320,7 @@ func (l *LocalFS) EditText(t FsTarget, edit FsEditRequest, expected *FsVersion) 
 		}
 		return FsEditOutcome{}, fsErr(FSErrIO, "%v", err)
 	}
-	// 版本守卫优先于字面匹配：陈旧先报 FS_STALE_VERSION。
+	// Version validation precedes matching so stale writes return FS_STALE_VERSION first.
 	cur, _ := versionOf(path)
 	if expected != nil && cur != *expected {
 		return FsEditOutcome{}, fsErr(FSErrStaleVersion, "%q version mismatch (observed %s, now %s)", t.DisplayPath, *expected, cur)
@@ -359,7 +346,7 @@ func (l *LocalFS) EditText(t FsTarget, edit FsEditRequest, expected *FsVersion) 
 		after = strings.Replace(bf, edit.OldString, edit.NewString, 1)
 	}
 
-	// 原子发布。
+	// Publish atomically.
 	if err := atomicWrite(path, after); err != nil {
 		return FsEditOutcome{}, fsErr(FSErrIO, "edit %q: %v", t.DisplayPath, err)
 	}
@@ -367,7 +354,7 @@ func (l *LocalFS) EditText(t FsTarget, edit FsEditRequest, expected *FsVersion) 
 	return FsEditOutcome{Version: v, Before: bf, After: after}, nil
 }
 
-// ObservedVersion 返回目标当前版本（供观察策略只读记录）。
+// ObservedVersion returns the current target version for observation tracking.
 func (l *LocalFS) ObservedVersion(t FsTarget) (FsVersion, bool) {
 	if _, err := os.Stat(string(t.TargetKey)); err != nil {
 		return "", false
@@ -376,7 +363,7 @@ func (l *LocalFS) ObservedVersion(t FsTarget) (FsVersion, bool) {
 	return v, true
 }
 
-// atomicWrite 临时文件 + rename 原子发布。
+// atomicWrite publishes a temporary file with rename.
 func atomicWrite(path, content string) error {
 	dir := filepath.Dir(path)
 	tmp, err := os.CreateTemp(dir, ".omnix-write-*")
@@ -401,7 +388,7 @@ func countOccurrences(s, sub string) int {
 	return strings.Count(s, sub)
 }
 
-// normalizeLF 把换行规整为 LF（差异基准）。
+// normalizeLF normalizes line endings for comparisons.
 func normalizeLF(s string) string {
 	return strings.ReplaceAll(s, "\r\n", "\n")
 }

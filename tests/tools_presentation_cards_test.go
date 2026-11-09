@@ -1,10 +1,6 @@
-// Package tests 的工具展示中立词汇（M47）验收测试。
-//
-// 覆盖：
-//   - 9 种内置卡片（tool-call: generic/terminal/diff + tool-result: generic/terminal/
-//     diff/search(matches)/search(paths)/read/web(search)/web(fetch)）字段一一对应
-//   - CardOf 判别
-//   - 自定义工具可提供自定义 card 类型
+// M47 presentation tests cover call cards (generic, terminal, diff), result cards (generic,
+// terminal, diff, search matches/paths, read, and web search/fetch), CardOf classification, and
+// custom card types.
 package tests
 
 import (
@@ -13,13 +9,13 @@ import (
 	"github.com/herlanai/omnix/pkg/tools"
 )
 
-// customCard 是自定义结果的卡片类型（自定义 card 判别；不实现 tools.ToolResultView）。
+// customCard is a custom result-card type that does not implement tools.ToolResultView.
 type customCard struct {
 	Card string `json:"card"`
 	Note string `json:"note"`
 }
 
-// TestToolPresentationAllCallCards 验证 3 种调用卡片。
+// TestToolPresentationAllCallCards verifies all three call-card types.
 func TestToolPresentationAllCallCards(t *testing.T) {
 	gen := tools.NewGenericCallView("Search Files")
 	gen.Kind = tools.CallKindSearch
@@ -39,7 +35,8 @@ func TestToolPresentationAllCallCards(t *testing.T) {
 	}
 }
 
-// TestToolPresentationAllResultCards 验证 6 种结果卡片（9 张含 search 两种 shape + web 两种 kind）。
+// TestToolPresentationAllResultCards verifies result-card families, including search shapes and
+// web kinds.
 func TestToolPresentationAllResultCards(t *testing.T) {
 	cases := []struct {
 		name string
@@ -62,7 +59,7 @@ func TestToolPresentationAllResultCards(t *testing.T) {
 	}
 }
 
-// TestToolPresentationSearchShapes 验证 search 两种 shape 字段。
+// TestToolPresentationSearchShapes verifies both search-result shapes.
 func TestToolPresentationSearchShapes(t *testing.T) {
 	m := tools.NewSearchMatchesView([]tools.SearchFileMatches{
 		{Path: "a.go", Matches: []tools.SearchLineMatch{{LineNumber: 1, Line: "func main()"}}},
@@ -76,7 +73,7 @@ func TestToolPresentationSearchShapes(t *testing.T) {
 	}
 }
 
-// TestToolPresentationWebKinds 验证 web 两种 kind。
+// TestToolPresentationWebKinds verifies both web-result kinds.
 func TestToolPresentationWebKinds(t *testing.T) {
 	s := tools.NewWebSearchResultView([]tools.WebSource{{URL: "https://x", Title: "X"}}, "answer", false)
 	if s.Kind != "search" || len(s.Sources) != 1 || s.Answer != "answer" {
@@ -88,7 +85,7 @@ func TestToolPresentationWebKinds(t *testing.T) {
 	}
 }
 
-// TestToolPresentationCustomCard 验证自定义卡片类型（不封闭的判别）。
+// TestToolPresentationCustomCard permits custom types beyond the built-in vocabulary.
 func TestToolPresentationCustomCard(t *testing.T) {
 	var view any = customCard{Card: "mycard", Note: "custom"}
 	if got := tools.CardOf(view); got != "other" {

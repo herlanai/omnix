@@ -1,13 +1,6 @@
-// 本文件对应任务 H08：Goroutine 治理 + 单一 Supervisor（统一启动/关闭生命周期）。
-//
-// 验证目标：
-//   1. 启动多个 worker，Shutdown 后全部优雅退出（done 关闭），无泄漏；
-//   2. 父 ctx 级联：取消根 ctx → 子 worker ctx 同步收到 Done；
-//   3. 幂等：重复 Shutdown / 重复 Close 安全；
-//   4. 超时：worker 拒绝退出时 Shutdown 返回错误（带超时 ctx）；
-//   5. 关闭后 Go() 拒绝；
-//   6. 单点 CancelWorker / WaitWorker / Healthy 行为正确；
-//   7. 集成示例：模拟 JSONL shardWriter 型 ticker worker 通过 Supervisor 治理。
+// H08 Supervisor tests cover graceful worker shutdown, parent cancellation, repeated
+// Shutdown/Close, timeout for unresponsive workers, rejection of Go after shutdown, individual
+// cancellation/wait/health operations, and a ticker-driven writer example.
 package tests
 
 import (
@@ -19,9 +12,7 @@ import (
 	"github.com/herlanai/omnix/pkg/jobs"
 )
 
-// ============================================================================
-// 1. 多 worker 启动 + 优雅关闭无泄漏
-// ============================================================================
+// 1. Start multiple workers and shut them down without leaks.
 
 func TestH08SupervisorGracefulShutdown(t *testing.T) {
 	sup := jobs.New()
@@ -30,7 +21,7 @@ func TestH08SupervisorGracefulShutdown(t *testing.T) {
 		name := "worker-" + itoa(i)
 		ok := sup.Go(name, func(ctx context.Context) {
 			defer exited.Add(1)
-			// 模拟有界后台循环：监听 ctx 退出。
+			// Simulate a bounded background loop that exits on cancellation.
 			<-ctx.Done()
 		})
 		if !ok {
@@ -48,15 +39,13 @@ func TestH08SupervisorGracefulShutdown(t *testing.T) {
 	if exited.Load() != 8 {
 		t.Fatalf("退出 worker 数 = %d, want 8（存在泄漏）", exited.Load())
 	}
-	// 关闭后无存活 worker → Healthy()==false
+	// No live workers after shutdown means Healthy is false.
 	if sup.Healthy(ctx) {
 		t.Fatal("Shutdown 后不应有存活 worker")
 	}
 }
 
-// ============================================================================
-// 2. 父 ctx 级联取消
-// ============================================================================
+// 2. Parent-context cancellation cascades to workers.
 
 func TestH08ParentCtxCascade(t *testing.T) {
 	sup := jobs.New()
@@ -77,9 +66,7 @@ func TestH08ParentCtxCascade(t *testing.T) {
 	}
 }
 
-// ============================================================================
-// 3. 幂等：重复 Shutdown / Close
-// ============================================================================
+// 3. Repeated Shutdown and Close are safe.
 
 func TestH08IdempotentShutdown(t *testing.T) {
 	sup := jobs.New()
@@ -91,24 +78,22 @@ func TestH08IdempotentShutdown(t *testing.T) {
 	if err := sup.Shutdown(ctx); err != nil {
 		t.Fatalf("第二次 Shutdown 应幂等成功: %v", err)
 	}
-	sup.Close() // 不应 panic / hang
+	sup.Close() // Must neither panic nor hang.
 	sup.Close()
-	// 关闭后 Go 拒绝
+	// Reject Go after shutdown.
 	if sup.Go("late", func(ctx context.Context) {}) {
 		t.Fatal("Shutdown 后 Go 应被拒绝")
 	}
 }
 
-// ============================================================================
-// 4. 超时：worker 拒不退出 → Shutdown 返回错误
-// ============================================================================
+// 4. Shutdown times out when a worker refuses to exit.
 
 func TestH08ShutdownTimeout(t *testing.T) {
 	sup := jobs.New()
-	// 一个 worker 忽略 ctx（模拟 buggy worker 不退出），一个正常退出。
-	sup.Go("stubborn", func(ctx context.Context) { select {} }) // 永不移交
+	// One worker ignores cancellation while another exits normally.
+	sup.Go("stubborn", func(ctx context.Context) { select {} }) // Do not finish until explicitly released.
 	sup.Go("ok", func(ctx context.Context) { <-ctx.Done() })
-	// 极短超时迫使 Shutdown 失败。
+	// Use a short deadline to force a shutdown timeout.
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
 	err := sup.Shutdown(ctx)
@@ -117,9 +102,7 @@ func TestH08ShutdownTimeout(t *testing.T) {
 	}
 }
 
-// ============================================================================
-// 5. 单点 CancelWorker / WaitWorker
-// ============================================================================
+// 5. Cancel and wait for an individual worker.
 
 func TestH08SingleWorkerCancel(t *testing.T) {
 	sup := jobs.New()
@@ -138,20 +121,18 @@ func TestH08SingleWorkerCancel(t *testing.T) {
 	if !exited.Load() {
 		t.Fatal("target worker 应已退出")
 	}
-	// 其它 worker 未受影响
+	// Other workers must remain unaffected.
 	if sup.WorkerCount() != 2 {
 		t.Fatalf("WorkerCount 应保持 2，got %d", sup.WorkerCount())
 	}
 }
 
-// ============================================================================
-// 6. 集成示例：模拟 ticker 型 writer worker（如 JSONL shardWriter）
-// ============================================================================
+// 6. Ticker-driven writer integration, resembling JSONL shardWriter.
 
 func TestH08TickerWorkerViaSupervisor(t *testing.T) {
 	sup := jobs.New()
 	var flushed atomic.Int64
-	// 模拟 JSONL shardWriter：每 10ms flush 一次，遇 ctx.Done 退出。
+	// Flush every 10 ms and exit on ctx.Done, like a JSONL shard writer.
 	sup.Go("jsonl-shard-0", func(ctx context.Context) {
 		tk := time.NewTicker(10 * time.Millisecond)
 		defer tk.Stop()
@@ -164,7 +145,7 @@ func TestH08TickerWorkerViaSupervisor(t *testing.T) {
 			}
 		}
 	})
-	// 跑 60ms
+	// Run for 60 ms.
 	time.Sleep(60 * time.Millisecond)
 	before := flushed.Load()
 	if before == 0 {
@@ -175,15 +156,17 @@ func TestH08TickerWorkerViaSupervisor(t *testing.T) {
 	if err := sup.Shutdown(ctx); err != nil {
 		t.Fatalf("Shutdown ticker worker 失败: %v", err)
 	}
-	// 关闭后立即 flash 应停下。
+	// Flushing should stop after shutdown.
 	tk := time.NewTicker(10 * time.Millisecond)
 	defer tk.Stop()
 	select {
 	case <-tk.C:
-		// 已过窗口，flushed 不应再有明显增长（no race check here，仅验证退出）
+		// After the interval, the flush count should no longer grow; this checks termination rather than
+		// races.
 	case <-time.After(50 * time.Millisecond):
 	}
-	// Shutdown 返回即可证明它已退出；此处只额外断言 flushed 仍 >= before。
+	// Shutdown returning proves termination; additionally verify flushed is at least its previous
+	// value.
 	if flushed.Load() < before {
 		t.Fatalf("flushed 应单调递增: before=%d now=%d", before, flushed.Load())
 	}

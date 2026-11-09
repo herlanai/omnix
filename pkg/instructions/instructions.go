@@ -1,5 +1,5 @@
-// Package instructions 复刻官方 context/agent-instructions 的指令文件发现纯逻辑：
-// 从工作目录向上定位项目根、构建根到工作目录的祖先链、并按目录对内容去重。
+// Package instructions implements pure instruction-file discovery logic from
+// context/agent-instructions: project roots, ancestor chains, and per-directory deduplication.
 package instructions
 
 import (
@@ -8,8 +8,8 @@ import (
 	"strings"
 )
 
-// FindProjectRoot 从 cwd 逐级向上，返回第一个含任一 root marker（如 ".git"）的
-// 目录；一直到文件系统根都没有则返回 cwd。
+// FindProjectRoot walks upward from cwd to the first root marker such as .git;
+// if none exists before the filesystem root, it returns cwd.
 func FindProjectRoot(cwd string, markers []string) string {
 	current, err := filepath.Abs(cwd)
 	if err != nil {
@@ -30,8 +30,8 @@ func FindProjectRoot(cwd string, markers []string) string {
 	}
 }
 
-// AncestorChain 返回从 root 到 cwd（含两端）的目录链，顺序由宽到窄。cwd 不在
-// root 之下时退化为只含 root。
+// AncestorChain returns directories from root to cwd, inclusive and broadest first.
+// If cwd is outside root, it returns only root.
 func AncestorChain(root, cwd string) []string {
 	r, _ := filepath.Abs(root)
 	c, _ := filepath.Abs(cwd)
@@ -46,21 +46,21 @@ func AncestorChain(root, cwd string) []string {
 		current = parent
 	}
 	chain = append(chain, r)
-	// 反转
+	// Reverse the chain.
 	for i, j := 0, len(chain)-1; i < j; i, j = i+1, j-1 {
 		chain[i], chain[j] = chain[j], chain[i]
 	}
 	return chain
 }
 
-// LoadedFile 是读到内容的指令候选。
+// LoadedFile is an instruction candidate whose content has been read.
 type LoadedFile struct {
 	DisplayPath string
 	Content     string
 }
 
-// DedupByDirectory 对同一目录内 trim 后内容相同的候选去重，保留发现顺序最早者；
-// 不同目录即使内容相同也保留。
+// DedupByDirectory keeps the earliest candidate with identical trimmed content
+// within each directory. Identical content in different directories is retained.
 func DedupByDirectory(files []LoadedFile) []LoadedFile {
 	seen := map[string]map[string]struct{}{}
 	var kept []LoadedFile

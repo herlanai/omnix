@@ -23,14 +23,14 @@ weight: 42
 关键约束是**消费方依赖抽象而非具体实现**：Agent 循环只知道自己拿到了一个 `LLMAdapter`，不关心背后是 DeepSeek、本地模型还是一个测试桩。正因如此，替换模型提供方、在测试里注入假实现，都不需要改动 Agent 一行代码。
 
 ```go
-// Definition：接口即契约
+// Definition: the interface is the contract.
 type LLMAdapter interface {
     Name() string
     Chat(ctx context.Context, req ChatRequest, cb func(StreamChunk)) (Usage, error)
 }
-// Consumer：只依赖接口
+// Consumer: depend only on the interface.
 func NewAgent(llm LLMAdapter) *Agent { ... }
-// Provider：任意实现该接口的具体适配器
+// Provider: any concrete adapter implementing the interface.
 ```
 
 ## LLM 适配器：接入任意模型
@@ -59,7 +59,7 @@ _, _ = llm.Chat(ctx, req, func(c llm.StreamChunk) {
     case llm.ChunkText:
         ui.Append(c.Text)
     case llm.ChunkToolCall:
-        // 累积工具调用，可能需要跨分片拼接参数
+        // Accumulate tool calls; arguments may span multiple chunks.
     }
 })
 ```

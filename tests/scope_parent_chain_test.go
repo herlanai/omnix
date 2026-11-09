@@ -1,4 +1,4 @@
-// Package tests 的 scope 父作用域链（parent.go）验收测试。
+// Scope parent-chain tests.
 package tests
 
 import (
@@ -33,7 +33,7 @@ func TestParentTreeRejectCycle(t *testing.T) {
 	pt := scope.NewParentTree()
 	_ = pt.Bind("a", "b")
 	_ = pt.Bind("b", "c")
-	// 让 c 的父为 a → a→b→c→a 成环
+	// Set c's parent to a, creating the cycle a -> b -> c -> a.
 	if err := pt.Bind("c", "a"); err != scope.ErrCycle {
 		t.Fatalf("cycle must be rejected, got %v", err)
 	}

@@ -1,4 +1,4 @@
-// 本文件对应任务 M19：Request Header 快照 + request/context 路由。
+// M19 request-header snapshots and request/context routing tests.
 package tests
 
 import (
@@ -9,11 +9,11 @@ import (
 	"github.com/herlanai/omnix/pkg/session"
 )
 
-// TestRequestHeaderRebuild 验证最新 request/header 快照 → rebuild 与实际 payload 一致。
+// TestRequestHeaderRebuild reconstructs the actual payload from the latest header snapshot.
 func TestRequestHeaderRebuild(t *testing.T) {
 	sl := session.NewSessionLog(brand.NewSessionID("rh_1"))
 
-	// 两次 header 快照（后一次覆盖）
+	// The second header snapshot supersedes the first.
 	_, _ = sl.Append(session.RequestHeaderData{ConfigEpoch: 1, SystemHash: "old", ToolCount: 2})
 	_, _ = sl.Append(session.RequestHeaderData{ConfigEpoch: 2, SystemHash: "new", ToolCount: 3})
 	_, _ = sl.Append(session.RequestContextData{Provider: "deepseek", Model: "deepseek-chat", Window: 64000, Reason: "initial"})
@@ -34,7 +34,7 @@ func TestRequestHeaderRebuild(t *testing.T) {
 		t.Fatalf("context 路由异常: %+v", ctx)
 	}
 
-	// rebuild 与实际 payload 一致
+	// The rebuilt payload must match the actual payload.
 	snap := &session.RequestHeaderSnapshot{
 		Header:       header,
 		Context:      ctx,
@@ -53,12 +53,13 @@ func TestRequestHeaderRebuild(t *testing.T) {
 	}
 }
 
-// TestRequestHeaderCompactionRebuild 验证 compaction 后仍可重建（不依赖原始 events）。
+// TestRequestHeaderCompactionRebuild reconstructs requests after compaction without original
+// history.
 func TestRequestHeaderCompactionRebuild(t *testing.T) {
 	sl := session.NewSessionLog(brand.NewSessionID("rh_2"))
 	_, _ = sl.Append(session.RequestHeaderData{ConfigEpoch: 5, SystemHash: "h5", ToolCount: 4})
 
-	// 模拟 compaction：只保留 header 快照事件（删掉其它）
+	// Simulate compaction by retaining only the header snapshot event.
 	events := sl.Events()
 
 	header, ok := session.FoldEpochHeader(events)

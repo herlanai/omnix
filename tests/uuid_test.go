@@ -1,4 +1,4 @@
-// Package tests 的 uuid v4 验收测试。
+// UUID v4 tests.
 package tests
 
 import (

@@ -1,4 +1,4 @@
-// 提供 pkg/subprocess 的本地实现：os/exec 驱动 + 进程树终止 + 环境 scrub + spill。
+// Local subprocess implementation using os/exec, process-tree termination, environment scrubbing, and spills.
 package subprocess
 
 import (
@@ -11,11 +11,11 @@ import (
 	"time"
 )
 
-// OmnixEnvPrefix 是 omnix 托管环境变量前缀；实现会先丢弃环境中的该前缀名称。
+// OmnixEnvPrefix identifies managed environment variables removed before explicit overrides.
 const OmnixEnvPrefix = "OMNIX_"
 
-// writeSpillFile 把 data 追加到 spill 文件并返回其路径。
-// 若 existing 非空则在现有文件上追加，否则在上限内新建。
+// writeSpillFile appends data to an existing spill file or creates one within
+// the limit, returning its path.
 func writeSpillFile(dir, existing string, data []byte) string {
 	if existing == "" {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -42,7 +42,7 @@ func writeSpillFile(dir, existing string, data []byte) string {
 	return existing
 }
 
-// ScrubParentEnv 丢弃环境中所有 OMNIX_* 名，返回 Scala 兼容的环境骨架（含原样其它项）。
+// ScrubParentEnv removes OMNIX_* variables while preserving other environment entries.
 func ScrubParentEnv() []string {
 	return scrubEnv(os.Environ())
 }
@@ -50,11 +50,11 @@ func ScrubParentEnv() []string {
 func scrubEnv(applied []string) []string {
 	out := make([]string, 0, len(applied))
 	for _, kv := range applied {
-		// 丢弃 OMNIX_*（OMNIX_ 前缀且分隔符是首 '='）。
+		// Remove OMNIX_* entries using the first equals sign as the separator.
 		if strings.HasPrefix(kv, OmnixEnvPrefix) {
 			continue
 		}
-		// 丢弃缺失 DELPHI 分隔的伪项
+		// Discard malformed entries without an equals separator.
 		if !strings.Contains(kv, "=") {
 			continue
 		}
@@ -63,7 +63,7 @@ func scrubEnv(applied []string) []string {
 	return out
 }
 
-// mergeEnv 把显式 env 合并到 base 上；键存在覆盖，空值（""值）表示从环境移除（tombstone）。
+// mergeEnv overlays explicit entries on base; empty values are removal tombstones.
 func mergeEnv(base []string, overrides map[string]string) []string {
 	m := make(map[string]string, len(base))
 	for _, kv := range base {
@@ -85,13 +85,13 @@ func mergeEnv(base []string, overrides map[string]string) []string {
 	return out
 }
 
-// LocalRuntime 是本地子进程运行时（os/exec）。
+// LocalRuntime executes local subprocesses through os/exec.
 type LocalRuntime struct{}
 
-// NewLocal 创建本地运行时。
+// NewLocal creates a local runtime.
 func NewLocal() *LocalRuntime { return &LocalRuntime{} }
 
-// Spawn 按 spec 启动一个受管理子进程并立即返回句柄。
+// Spawn starts a managed subprocess and immediately returns a handle.
 func (r *LocalRuntime) Spawn(spec SubprocessSpawnSpec) *SubprocessHandle {
 	stdoutR := &outputReader{}
 	stderrR := &outputReader{}
@@ -102,11 +102,11 @@ func (r *LocalRuntime) Spawn(spec SubprocessSpawnSpec) *SubprocessHandle {
 	if spec.GraceMs <= 0 {
 		spec.GraceMs = 2000
 	}
-	// 环境：先 scrub，再合并显式条目。
+	// Scrub the inherited environment before merging explicit entries.
 	cmd.Env = mergeEnv(ScrubParentEnv(), spec.Env)
-	// 新进程组/新进程（用于树终止）。
+	// Create a separate process group for tree termination.
 	if runtime.GOOS != "windows" {
-		// 置进程组 id，便于 SIGTERM 整组（见 terminate）。
+		// Set the process group ID for group-wide SIGTERM in terminate.
 		platformSetSysProcAttr(cmd)
 	}
 
@@ -148,16 +148,16 @@ func (r *LocalRuntime) Spawn(spec SubprocessSpawnSpec) *SubprocessHandle {
 			killTree(cmd, spec.GraceMs)
 		},
 	}
-	_ = stdin // stdin pipe 由调用方持有（本简化实现未暴露）
+	_ = stdin // The caller owns the stdin pipe; this simplified implementation does not expose it.
 
-	// 若 spawn 失败，立即回填 done/doneErr。
+	// Record startup failure immediately in done/doneErr.
 	if startErr != nil {
 		doneErr <- fmt.Errorf("subprocess: spawn %q: %w", spec.Argv[0], startErr)
 		close(doneErr)
 		return h
 	}
 
-	// 等待退出。
+	// Wait for process exit.
 	go func() {
 		wErr := cmd.Wait()
 		res := SubprocessOutcome{}
@@ -165,7 +165,7 @@ func (r *LocalRuntime) Spawn(spec SubprocessSpawnSpec) *SubprocessHandle {
 			res.ExitCode = 0
 		} else if ee, ok := wErr.(*exec.ExitError); ok {
 			res.ExitCode = ee.ExitCode()
-			// 信号集：Windows 无信号；*nix 可用 ee.Sys() 取 Signal。
+			// Unix obtains signals through ExitError.Sys; Windows has no signal value.
 			if sig := platformExitSignal(ee); sig != "" {
 				res.Signal = sig
 				res.ExitCode = -1
@@ -181,7 +181,7 @@ func (r *LocalRuntime) Spawn(spec SubprocessSpawnSpec) *SubprocessHandle {
 	return h
 }
 
-// pipeToReader 把流复制到 reader，按内存上限与 spill 处理。
+// pipeToReader copies a stream while enforcing memory limits and spill handling.
 func pipeToReader(r io.Reader, rd *outputReader, memCap int, spillRoot string) {
 	buf := make([]byte, 16*1024)
 	for {
@@ -199,29 +199,29 @@ func spillCapFor(root string) int {
 	if root == "" {
 		return 0
 	}
-	return 8 << 20 // 8MB 完整流上限
+	return 8 << 20 // Eight-megabyte complete-stream limit.
 }
 
-// killTree 在进程树上执行终止升级。
+// killTree escalates termination across a process tree.
 func killTree(cmd *exec.Cmd, graceMs int) {
 	pid := cmd.Process.Pid
 	if pid <= 0 {
 		return
 	}
 	if runtime.GOOS == "windows" {
-		// Windows：taskkill /T 立即 force 整棵进程树。
+		// Windows immediately forces tree termination with taskkill /T.
 		_ = exec.Command("taskkill", "/T", "/F", "/PID", fmt.Sprint(pid)).Run()
 		return
 	}
-	// *nix：向进程组发 SIGTERM → grace → SIGKILL，保证整棵树（含孙进程）清理。
+	// Unix sends SIGTERM, waits through the grace period, then SIGKILL to the group, including descendants.
 	_ = platformSignalGroup(-pid, syscallSIGTERM)
 	grace := time.Duration(graceMs) * time.Millisecond
 	time.Sleep(grace)
 	_ = platformSignalGroup(-pid, syscallSIGKILL)
 }
 
-// platformSetSysProcAttr / platformExitSignal / platformSignalGroup 由平台文件提供，
-// 信号常量 syscallSIGTERM / syscallSIGKILL 随平台而定。
+// Platform files implement process attributes, exit signals, and group signaling,
+// including platform-specific SIGTERM and SIGKILL constants.
 type outputWriter struct {
 	reader    *outputReader
 	memCap    int

@@ -1,4 +1,4 @@
-// Package tests 的 instructions 指令发现验收测试。
+// Instruction-discovery tests.
 package tests
 
 import (
@@ -37,8 +37,8 @@ func TestAncestorChain(t *testing.T) {
 func TestDedupByDirectory(t *testing.T) {
 	files := []instructions.LoadedFile{
 		{DisplayPath: filepath.Clean("a/AGENTS.md"), Content: "x"},
-		{DisplayPath: filepath.Clean("a/CLAUDE.md"), Content: " x "}, // 同目录 trim 相同 → 去
-		{DisplayPath: filepath.Clean("b/AGENTS.md"), Content: "x"},   // 不同目录 → 留
+		{DisplayPath: filepath.Clean("a/CLAUDE.md"), Content: " x "}, // Deduplicate identical trimmed text from the same directory.
+		{DisplayPath: filepath.Clean("b/AGENTS.md"), Content: "x"},   // Retain entries from different directories.
 	}
 	kept := instructions.DedupByDirectory(files)
 	if len(kept) != 2 {

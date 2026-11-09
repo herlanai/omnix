@@ -1,23 +1,15 @@
-// 本文件对应任务 M47：Tool Presentation 中立 vocabulary（9 种 card）。
-//
-// 对齐上游：packages/core/tools/src/presentation.ts
-//
-// 设计要点：
-//   - ToolCallView 与 ToolResultView 是「中立」的渲染意图词汇，工具通过 presentCall /
-//     presentResult 声明自身卡片，UI 按其 card 切换渲染，绝不特判工具名；
-//   - ToolCallView 3 种：generic / terminal / diff；ToolResultView 6 种：generic /
-//     terminal / diff / search(matches|paths) / read / web(search|fetch) → 合计 9 种 card；
-//   - 自定义工具可提供自定义 card 类型（card 判别为 string，不封闭）。
+// Tool presentation provides a neutral vocabulary matching upstream presentation.ts (M47). Tools
+// declare call and result cards; UIs dispatch on card type, never on tool name. Calls support
+// generic, terminal, and diff cards; results support generic, terminal, diff, search, read, and
+// web cards. String discriminators permit custom cards.
 package tools
 
-// ============================================================================
-// 工具调用类别（ToolCallKind）
-// ============================================================================
+// Tool-call categories.
 
-// ToolCallKind 是工具调用的类别，UI 据此选图标/样式；other 为缺省。
+// ToolCallKind selects a UI icon or style; other is the default.
 type ToolCallKind string
 
-// 工具调用类别枚举。
+// Supported tool-call categories.
 const (
 	CallKindRead    ToolCallKind = "read"
 	CallKindEdit    ToolCallKind = "edit"
@@ -29,55 +21,53 @@ const (
 	CallKindOther   ToolCallKind = "other"
 )
 
-// ============================================================================
-// 文件位置与差异（call 与 diff 共用）
-// ============================================================================
+// File locations and diffs shared by call and result views.
 
-// FileLocation 是工具读取/修改的文件位置（供编辑器"跟随"）。
+// FileLocation identifies a file position for editor navigation.
 type FileLocation struct {
-	// Path 工具操作的路径（模型向路径）。
+	// Path is the model-facing path operated on by the tool.
 	Path string `json:"path"`
-	// Line 可选的 1-based 关注行号。
+	// Line is an optional one-based focus line.
 	Line int `json:"line,omitempty"`
 }
 
-// FileDiff 是工具即将做出的单文件变更（用于内联 diff 渲染）。
+// FileDiff describes a proposed single-file change for inline rendering.
 type FileDiff struct {
-	// Path 文件路径。
+	// Path is the file path.
 	Path string `json:"path"`
-	// OldText 变更前内容；新文件/覆盖时（调用时无先前内容）为 nil 表示。
+	// OldText is the previous content, or nil when no prior content is available for a new file or
+	// overwrite.
 	OldText *string `json:"oldText,omitempty"`
-	// NewText 变更后内容。
+	// NewText is the resulting content.
 	NewText string `json:"newText"`
 }
 
-// ============================================================================
-// ToolCallView（3 种）
-// ============================================================================
+// ToolCallView variants: generic, terminal, and diff.
 
-// ToolCallView 是待执行的调用展示（card 判别联合）。
+// ToolCallView describes a pending invocation using a card discriminator.
 type ToolCallView interface {
 	isCallView()
 }
 
-// GenericCallView 是默认卡片：带标题的工具调用行 + 可选类别/突出输入/附加内容/位置。
+// GenericCallView provides a title with optional category, highlighted input, extra content, and
+// location.
 type GenericCallView struct {
-	Card      string          `json:"card"`
-	Title     string          `json:"title"`
-	Kind      ToolCallKind    `json:"kind,omitempty"`
-	RawInput  any             `json:"rawInput,omitempty"`
-	Content   []any           `json:"content,omitempty"`
-	Locations []FileLocation  `json:"locations,omitempty"`
+	Card      string         `json:"card"`
+	Title     string         `json:"title"`
+	Kind      ToolCallKind   `json:"kind,omitempty"`
+	RawInput  any            `json:"rawInput,omitempty"`
+	Content   []any          `json:"content,omitempty"`
+	Locations []FileLocation `json:"locations,omitempty"`
 }
 
 func (GenericCallView) isCallView() {}
 
-// NewGenericCallView 构造 generic 调用卡片。
+// NewGenericCallView creates a generic invocation card.
 func NewGenericCallView(title string) *GenericCallView {
 	return &GenericCallView{Card: "generic", Title: title, Kind: CallKindOther}
 }
 
-// TerminalCallView 是终终端命令卡片（cwd 作为头部）。
+// TerminalCallView displays a terminal command with its working directory as the header.
 type TerminalCallView struct {
 	Card        string `json:"card"`
 	Title       string `json:"title"`
@@ -87,37 +77,35 @@ type TerminalCallView struct {
 
 func (TerminalCallView) isCallView() {}
 
-// NewTerminalCallView 构造 terminal 调用卡片。
+// NewTerminalCallView creates a terminal invocation card.
 func NewTerminalCallView(command string) *TerminalCallView {
 	return &TerminalCallView{Card: "terminal", Title: command}
 }
 
-// DiffCallView 是内联 diff 卡片（创建/修改文件）。
+// DiffCallView displays an inline diff for file creation or modification.
 type DiffCallView struct {
-	Card      string          `json:"card"`
-	Title     string          `json:"title"`
-	Diffs     []FileDiff      `json:"diffs"`
-	Locations []FileLocation  `json:"locations,omitempty"`
+	Card      string         `json:"card"`
+	Title     string         `json:"title"`
+	Diffs     []FileDiff     `json:"diffs"`
+	Locations []FileLocation `json:"locations,omitempty"`
 }
 
 func (DiffCallView) isCallView() {}
 
-// NewDiffCallView 构造 diff 调用卡片。
+// NewDiffCallView creates a diff invocation card.
 func NewDiffCallView(title string, diffs []FileDiff) *DiffCallView {
 	return &DiffCallView{Card: "diff", Title: title, Diffs: diffs}
 }
 
-// ============================================================================
-// ToolResultView（6 种：generic/terminal/diff/search/read/web）
-// ============================================================================
+// ToolResultView variants: generic, terminal, diff, search, read, and web.
 
-// ToolResultView 是完成调用展示（card 判别联合）。9 种 card 覆盖 generic/terminal/
-// diff/search(matches)/search(paths)/read/web(search)/web(fetch)，另加 generic。
+// ToolResultView describes a completed invocation using a card discriminator. Search supports
+// matches and paths; web supports search and fetch variants.
 type ToolResultView interface {
 	isResultView()
 }
 
-// GenericResultView 是默认完成卡片。
+// GenericResultView is the default completion card.
 type GenericResultView struct {
 	Card    string `json:"card"`
 	Title   string `json:"title,omitempty"`
@@ -126,12 +114,12 @@ type GenericResultView struct {
 
 func (GenericResultView) isResultView() {}
 
-// NewGenericResultView 构造 generic 结果卡片。
+// NewGenericResultView creates a generic result card.
 func NewGenericResultView() *GenericResultView {
 	return &GenericResultView{Card: "generic"}
 }
 
-// TerminalResultView 是终端完成状态。
+// TerminalResultView describes terminal-command completion.
 type TerminalResultView struct {
 	Card     string `json:"card"`
 	Title    string `json:"title,omitempty"`
@@ -142,12 +130,12 @@ type TerminalResultView struct {
 
 func (TerminalResultView) isResultView() {}
 
-// NewTerminalResultView 构造 terminal 结果卡片。
+// NewTerminalResultView creates a terminal result card.
 func NewTerminalResultView(output string) *TerminalResultView {
 	return &TerminalResultView{Card: "terminal", Output: output}
 }
 
-// DiffResultView 是完成文件变更的 diff 卡片。
+// DiffResultView displays a completed file change.
 type DiffResultView struct {
 	Card  string     `json:"card"`
 	Title string     `json:"title,omitempty"`
@@ -156,48 +144,48 @@ type DiffResultView struct {
 
 func (DiffResultView) isResultView() {}
 
-// SearchLineMatch 是文件内单条匹配行。
+// SearchLineMatch describes one matching line in a file.
 type SearchLineMatch struct {
 	LineNumber int    `json:"lineNumber"`
 	Line       string `json:"line"`
 }
 
-// SearchFileMatches 是某文件的分组匹配。
+// SearchFileMatches groups matches by file.
 type SearchFileMatches struct {
 	Path    string            `json:"path"`
 	Matches []SearchLineMatch `json:"matches"`
 }
 
-// SearchResultView 是完成搜索卡片（matches/paths 两种 shape）。
+// SearchResultView displays matches or matching paths.
 type SearchResultView struct {
-	Card      string             `json:"card"`
-	Shape     string             `json:"shape"` // "matches" | "paths"
-	Title     string             `json:"title,omitempty"`
+	Card      string              `json:"card"`
+	Shape     string              `json:"shape"` // "matches" | "paths"
+	Title     string              `json:"title,omitempty"`
 	Files     []SearchFileMatches `json:"files,omitempty"`
-	Paths     []string           `json:"paths,omitempty"`
-	Truncated bool               `json:"truncated"`
-	Total     int                `json:"total"`
+	Paths     []string            `json:"paths,omitempty"`
+	Truncated bool                `json:"truncated"`
+	Total     int                 `json:"total"`
 }
 
 func (SearchResultView) isResultView() {}
 
-// NewSearchMatchesView 构造按文件分组的搜索匹配卡片。
+// NewSearchMatchesView creates a result card with matches grouped by file.
 func NewSearchMatchesView(files []SearchFileMatches, truncated bool, total int) *SearchResultView {
 	return &SearchResultView{Card: "search", Shape: "matches", Files: files, Truncated: truncated, Total: total}
 }
 
-// NewSearchPathsView 构造扁平路径列表的搜索卡片。
+// NewSearchPathsView creates a result card containing a flat path list.
 func NewSearchPathsView(paths []string, truncated bool, total int) *SearchResultView {
 	return &SearchResultView{Card: "search", Shape: "paths", Paths: paths, Truncated: truncated, Total: total}
 }
 
-// ReadFileLine 是带 1-based 行号的单行文件内容。
+// ReadFileLine contains one file line and its one-based line number.
 type ReadFileLine struct {
 	Number int    `json:"number"`
 	Text   string `json:"text"`
 }
 
-// ReadResultView 是带行号代码视图的完成读卡片。
+// ReadResultView displays file content with line numbers.
 type ReadResultView struct {
 	Card       string         `json:"card"`
 	Title      string         `json:"title,omitempty"`
@@ -211,12 +199,12 @@ type ReadResultView struct {
 
 func (ReadResultView) isResultView() {}
 
-// NewReadResultView 构造读文件结果卡片。
+// NewReadResultView creates a file-read result card.
 func NewReadResultView(path string, offset int, lines []ReadFileLine, totalLines int) *ReadResultView {
 	return &ReadResultView{Card: "read", Path: path, Offset: offset, Lines: lines, TotalLines: totalLines}
 }
 
-// WebSource 是 web 检索结果中的单个可引用来源。
+// WebSource identifies a citable web-search source.
 type WebSource struct {
 	URL         string `json:"url"`
 	Title       string `json:"title,omitempty"`
@@ -224,39 +212,38 @@ type WebSource struct {
 	PublishedAt string `json:"publishedAt,omitempty"`
 }
 
-// WebResultView 是完成 web 检索卡片（search/fetch 两种 kind）。
+// WebResultView displays completed web search or fetch results.
 type WebResultView struct {
-	Card      string      `json:"card"`
-	Kind      string      `json:"kind"` // "search" | "fetch"
-	Title     string      `json:"title,omitempty"`
-	Sources   []WebSource `json:"sources,omitempty"`
-	Answer    string      `json:"answer,omitempty"`
-	URL       string      `json:"url,omitempty"`
-	StatusCode int        `json:"statusCode,omitempty"`
-	Truncated bool        `json:"truncated"`
+	Card       string      `json:"card"`
+	Kind       string      `json:"kind"` // "search" | "fetch"
+	Title      string      `json:"title,omitempty"`
+	Sources    []WebSource `json:"sources,omitempty"`
+	Answer     string      `json:"answer,omitempty"`
+	URL        string      `json:"url,omitempty"`
+	StatusCode int         `json:"statusCode,omitempty"`
+	Truncated  bool        `json:"truncated"`
 }
 
 func (WebResultView) isResultView() {}
 
-// NewWebSearchResultView 构造 web_search 结果卡片。
+// NewWebSearchResultView creates a web-search result card.
 func NewWebSearchResultView(sources []WebSource, answer string, truncated bool) *WebResultView {
 	return &WebResultView{Card: "web", Kind: "search", Sources: sources, Answer: answer, Truncated: truncated}
 }
 
-// NewWebFetchResultView 构造 web_fetch 结果卡片。
+// NewWebFetchResultView creates a web-fetch result card.
 func NewWebFetchResultView(url string, statusCode int, truncated bool) *WebResultView {
 	return &WebResultView{Card: "web", Kind: "fetch", URL: url, StatusCode: statusCode, Truncated: truncated}
 }
 
-// ============================================================================
-// CardOf 判别助手 + 自定义卡片
-// ============================================================================
+// Card discriminator helpers and custom-card support.
 
-// CardOf 返回任意调用卡片/结果卡片的 card 判别值（自定义类型用返回值赋值）。
+// CardOf returns the discriminator of a call or result card; custom types can expose the same
+// field.
 func CardOf(v any) string {
 	switch tv := v.(type) {
 	case ToolCallView:
-		// 通过已声明的 card 字段统一提取。
+		// Extract the declared card field consistently.
 		switch tv.(type) {
 		case *GenericCallView:
 			return "generic"
@@ -298,7 +285,7 @@ func CardOf(v any) string {
 		case DiffResultView:
 			return "diff"
 		default:
-			_ = r // 自定义结果类型：回落 other
+			_ = r // Fall back to other for unrecognized custom result types.
 		}
 	}
 	return "other"

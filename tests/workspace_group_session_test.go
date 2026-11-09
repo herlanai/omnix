@@ -1,7 +1,5 @@
-// 本文件验证任务 S14：Workspace Registry。
-//
-// 覆盖：相同 root 幂等返回同一 id；resume-on-open 记录/清除；会话分组；CAS 更新；
-// List 确定性；list 校验。
+// S14 workspace tests cover idempotent roots, resume-on-open state, session grouping, CAS updates,
+// deterministic listing, and validation.
 package tests
 
 import (
@@ -14,7 +12,7 @@ import (
 	"github.com/herlanai/omnix/pkg/workspace"
 )
 
-// TestWorkspaceSameRootSameID 验证相同 root 创建两次返回同一 ID（幂等）。
+// TestWorkspaceSameRootSameID returns the same ID for repeated creation with the same root.
 func TestWorkspaceSameRootSameID(t *testing.T) {
 	reg := workspace.New(storage.NewMemoryKV())
 	ctx := context.Background()
@@ -31,7 +29,7 @@ func TestWorkspaceSameRootSameID(t *testing.T) {
 	if id1 != id2 {
 		t.Fatalf("相同 root 应返回同一 id，实际 %v vs %v", id1, id2)
 	}
-	// 规范化后路径应一致。
+	// Normalized paths must match.
 	ws, _, err := reg.Get(ctx, id1)
 	if err != nil {
 		t.Fatal(err)
@@ -41,7 +39,7 @@ func TestWorkspaceSameRootSameID(t *testing.T) {
 	}
 }
 
-// TestWorkspaceDifferentRootDifferentID 验证不同 root 产生不同 id。
+// TestWorkspaceDifferentRootDifferentID assigns distinct IDs to distinct roots.
 func TestWorkspaceDifferentRootDifferentID(t *testing.T) {
 	reg := workspace.New(storage.NewMemoryKV())
 	ctx := context.Background()
@@ -52,7 +50,7 @@ func TestWorkspaceDifferentRootDifferentID(t *testing.T) {
 	}
 }
 
-// TestWorkspaceResumeOnOpen 验证 resume-on-open 记录与清除。
+// TestWorkspaceResumeOnOpen records and clears resume state.
 func TestWorkspaceResumeOnOpen(t *testing.T) {
 	reg := workspace.New(storage.NewMemoryKV())
 	ctx := context.Background()
@@ -79,7 +77,7 @@ func TestWorkspaceResumeOnOpen(t *testing.T) {
 	}
 }
 
-// TestWorkspaceSessionGroup 验证会话分组设置（整体替换）。
+// TestWorkspaceSessionGroup replaces session groups as a whole.
 func TestWorkspaceSessionGroup(t *testing.T) {
 	reg := workspace.New(storage.NewMemoryKV())
 	ctx := context.Background()
@@ -93,7 +91,7 @@ func TestWorkspaceSessionGroup(t *testing.T) {
 	}
 }
 
-// TestWorkspaceList 验证 List 返回全部工作区（确定性字典序）。
+// TestWorkspaceList returns every workspace in deterministic lexical order.
 func TestWorkspaceList(t *testing.T) {
 	reg := workspace.New(storage.NewMemoryKV())
 	ctx := context.Background()
@@ -107,7 +105,7 @@ func TestWorkspaceList(t *testing.T) {
 	if len(wsList) != 3 {
 		t.Fatalf("应有 3 个工作区，实际 %d", len(wsList))
 	}
-	// 校验 root 字典序（规范化后相对路径 → 绝对路径，仅验证数量与根路径集合）。
+	// Paths are normalized to absolute roots; verify the count and root set.
 	seen := map[string]bool{}
 	for _, ws := range wsList {
 		if seen[ws.Root] {
@@ -117,7 +115,7 @@ func TestWorkspaceList(t *testing.T) {
 	}
 }
 
-// TestWorkspaceMissingRootRejected 验证空 root 报错。
+// TestWorkspaceMissingRootRejected rejects an empty root.
 func TestWorkspaceMissingRootRejected(t *testing.T) {
 	reg := workspace.New(storage.NewMemoryKV())
 	ctx := context.Background()

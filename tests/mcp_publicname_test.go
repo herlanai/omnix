@@ -1,4 +1,4 @@
-// Package tests 的 mcp 公共名推导验收测试。
+// MCP public-name derivation tests.
 package tests
 
 import (
@@ -17,7 +17,7 @@ func TestPublicNameClean(t *testing.T) {
 
 func TestPublicNameInvalidChar(t *testing.T) {
 	got := mcp.PublicToolName("srv", "a.b")
-	// '.' 被替换为 _，并追加 hash
+	// Replace dots with underscores and append a hash.
 	if !strings.HasPrefix(got, "mcp__srv__a_b_") {
 		t.Fatalf("normalized name = %q", got)
 	}
@@ -27,7 +27,7 @@ func TestPublicNameInvalidChar(t *testing.T) {
 }
 
 func TestPublicNameDistinctHash(t *testing.T) {
-	// 两个替换后会撞名的身份应得到不同 hash
+	// Identities that normalize to the same text must receive distinct hashes.
 	a := mcp.PublicToolName("s", "a.b")
 	b := mcp.PublicToolName("s", "a/b")
 	if a == b {

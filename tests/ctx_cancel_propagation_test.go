@@ -1,9 +1,6 @@
-// 本文件验证任务 H01：Agent 请求 ctx 透传（取消/超时传播）。
-//
-// 覆盖：
-//   1. Pipeline 透传：把可取消父 ctx 传入 pipeline.Run，工具实现能收到该 ctx；父取消后
-//      工具 ctx 变为 Done（取消/cancel 语义可传播进工具实现）。
-//   2. Agent SetRunContext：绑定上游 ctx 后，工具/LLM 调用经由该 ctx（而非 Background）。
+// H01 context propagation tests verify parent cancellation reaches pipeline tools and that
+// Agent.SetRunContext supplies the bound context to tool and LLM calls instead of
+// context.Background.
 package tests
 
 import (
@@ -18,9 +15,10 @@ import (
 	"github.com/herlanai/omnix/pkg/tools"
 )
 
-// TestH01PipelinePropagatesCancel 验证 pipeline 把父 ctx 的取消传播进工具实现。
+// TestH01PipelinePropagatesCancel propagates parent cancellation into tool execution.
 func TestH01PipelinePropagatesCancel(t *testing.T) {
 	parent, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
 	var observed bool
 	tool := &tools.Tool{
@@ -36,10 +34,10 @@ func TestH01PipelinePropagatesCancel(t *testing.T) {
 	}
 	pipeline := tools.NewPipeline().WithTool(tool)
 
-	// 第一次正常执行（父未取消）→ 工具 ctx 不应 Done。
+	// Before parent cancellation, the tool context must remain active.
 	go func() {
 		time.Sleep(50 * time.Millisecond)
-		cancel() // 父取消
+		cancel() // Cancel the parent.
 	}()
 	res := pipeline.Run(parent, &tools.ToolCallRequest{
 		CallID: brand.NewToolCallID("h1-1"), Tool: "probe", Input: map[string]any{},
@@ -52,20 +50,29 @@ func TestH01PipelinePropagatesCancel(t *testing.T) {
 	}
 }
 
-// TestH01AgentPathCancellation 验证 Agent.executeTool 经 pipeline 调用工具时，工具收到的是
-// Agent 绑定运行 ctx（SetRunContext）；父 ctx 取消后工具 ctx.Done 触发。
+// TestH01AgentPathCancellation verifies tools invoked through Agent.executeTool receive the
+// SetRunContext context and observe parent cancellation.
 func TestH01AgentPathCancellation(t *testing.T) {
 	parent, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
 	sid := brand.NewSessionID("h1-agent")
 	pipeline := tools.NewPipeline()
-	var canceled bool
+	started := make(chan struct{}, 1)
+	canceled := make(chan struct{}, 1)
 	tool := &tools.Tool{
 		Name: "probe", Description: "probe",
 		Execute: func(ctx context.Context, _ map[string]any) (any, error) {
 			select {
+			case started <- struct{}{}:
+			default:
+			}
+			select {
 			case <-ctx.Done():
-				canceled = true
+				select {
+				case canceled <- struct{}{}:
+				default:
+				}
 			case <-time.After(2 * time.Second):
 			}
 			return "ok", nil
@@ -75,26 +82,29 @@ func TestH01AgentPathCancellation(t *testing.T) {
 
 	adapter := &toolCallOnceLLM{toolName: "probe"}
 	a := agent.NewAgent(sid, session.NewSessionLog(sid), nil, pipeline, adapter)
+	defer a.Dispose()
 	a.SetToolProvider(func(name string) *tools.Tool { return tool })
-	a.SetRunContext(parent, 0) // 绑定上游可取消 ctx
-	_ = a.Run("do it")
+	a.SetRunContext(parent, 0) // Bind the cancellable upstream context.
+	if err := a.Run("do it"); err != nil {
+		t.Fatal(err)
+	}
 
-	// 父取消：工具 ctx 应 Done。
-	go func() {
-		time.Sleep(100 * time.Millisecond)
-		cancel()
-	}()
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) && !canceled {
-		time.Sleep(20 * time.Millisecond)
+	// Wait for execution before canceling so the test exercises the tool path.
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("tool execution did not start")
 	}
-	a.Dispose()
-	if !canceled {
-		t.Fatal("Agent 绑定的上游 ctx 取消后，经 pipeline 执行的工具应观测到 Done")
+	cancel()
+	select {
+	case <-canceled:
+	case <-time.After(2 * time.Second):
+		t.Fatal("tool did not observe parent cancellation")
 	}
+
 }
 
-// toolCallOnceLLM 是先产出一个工具调用、再完成的简易 LLM 桩。
+// toolCallOnceLLM emits one tool call and then completes.
 type toolCallOnceLLM struct {
 	toolName string
 }

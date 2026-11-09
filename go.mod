@@ -1,5 +1,5 @@
-// omnix 模块定义：Go 版 DeepSeek Harness 进程内 SDK
-// 模块路径与仓库地址保持一致，便于 go get 集成
+// omnix module: an in-process Go SDK for DeepSeek Harness.
+// Match the module path to the repository URL for go get integration.
 module github.com/herlanai/omnix
 
 go 1.25.0

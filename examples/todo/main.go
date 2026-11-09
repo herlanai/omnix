@@ -1,18 +1,7 @@
-// 教程：Todo 系统（整体替换写入）——规划原语之一（教学示例）。
-//
-// 在 Agent 的规划能力里，Goal 管"目标状态机"，Todo 管"待办清单"。本项目对
-// Todo 采用官方一致的【整体替换】（last-write-wins）语义：每次写入都用一套
-// 全新的待办列表整体覆盖旧列表，不做事后逐条 diff。
-//
-// 本示例演示：
-//   1. 用 todo_write 工具写入一套待办（整体替换）；
-//   2. 用派生函数读回当前待办（fold 自事件日志）；
-//   3. 再写一次观察"整体替换"效果——旧列表被完全覆盖。
-//
-// 运行方式（仓库根目录）：
-//   go run ./examples/todo
-//
-// 对照阅读：pkg/todo/todo.go（TodoWriteTool / Current / TodoItem）
+// Todo tutorial: each todo_write replaces the entire list with last-write-wins semantics, matching
+// upstream. Goal manages the objective state machine; Todo manages its checklist. Write a list,
+// derive it from the event log, then write again to observe complete replacement rather than
+// item-by-item merging. Run: go run ./examples/todo. See pkg/todo/todo.go.
 package main
 
 import (
@@ -26,15 +15,13 @@ import (
 
 func main() {
 	ctx := context.Background()
-	// 1. 创建会话日志（Todo 状态由它派生）。
+	// 1. Create the session log from which Todo state is derived.
 	sl := session.NewSessionLog(brand.NewSessionID("todo-demo"))
-	// 2. 构造 todo_write 工具（绑定到日志）。
+	// 2. Bind the todo_write tool to the log.
 	tw := todo.NewTodoWriteTool(sl)
 
-	// ------------------------------------------------------------------
-	// 写入第一套待办。
-	// 注意入参结构：tool 接收 { items: [{content, done?}] }，整体替换。
-	// ------------------------------------------------------------------
+	// Write the first list. Input has the shape { items: [{content, done?}] } and replaces the whole
+	// list.
 	if _, err := tw.Execute(ctx, map[string]any{
 		"items": []any{
 			map[string]any{"content": "整理需求", "done": false},
@@ -47,10 +34,8 @@ func main() {
 	fmt.Println("— 第一次写入后（3 项）—")
 	dump(todo.Current(sl))
 
-	// ------------------------------------------------------------------
-	// 再次写入：只传 2 项 → 旧 3 项被【整体覆盖】。
-	// 这就是"整体替换"语义：不会保留/合并旧的已办项。
-	// ------------------------------------------------------------------
+	// Write two items to replace the previous three completely; completed items are neither retained
+	// nor merged.
 	if _, err := tw.Execute(ctx, map[string]any{
 		"items": []any{
 			map[string]any{"content": "补充测试", "done": false},
@@ -65,7 +50,7 @@ func main() {
 	fmt.Println("\n— 结论：Todo = 整体替换清单，读自事件日志(派生)，与 Goal 互补 —")
 }
 
-// dump 打印当前待办列表。
+// dump prints the current todo list.
 func dump(items []todo.TodoItem) {
 	for i, it := range items {
 		fmt.Printf("  %d. [%s] %s\n", i+1, it.ResolvedStatus(), it.Content)

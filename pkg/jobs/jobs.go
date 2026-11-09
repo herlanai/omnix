@@ -1,16 +1,9 @@
-// Package jobs 提供后台任务运行时（Jobs Runtime）与 owner 绑定。
-//
-// 对齐上游：packages/jobs/jobs（S11）+ owner binding（M46）
-//
-// 本文件对应任务 S11（Jobs Runtime）与 M46（Job 生命周期 owner 绑定）。
-//
-// 设计要点：
-//   - Job 由生产者声明（kind/label/owner）+ 运行钩子（cancel/done/readOutput）；
-//     runtime 拥有身份、访问与生命周期状态；
-//   - owner 绑定（M46）：owner Agent 以 sessionId 上网，Agent dispose → 该 owner 名下
-//     全部 Jobs 立刻 cancel hook（子进程树终止），孤儿进程彻底清理；
-//   - JobSnapshot 是只读投影，供工具/监听消费；ownerSession 用于授权与关联；
-//   - readOutput 是增量消费游标（每个 job 一个 consuming cursor）。
+// Package jobs implements background jobs (S11) and owner binding (M46), matching
+// jobs/jobs. Producers supply kind, label, owner, and cancel/done/readOutput hooks;
+// the runtime owns identity, access, and lifecycle state. Owners are session IDs.
+// Disposing an agent cancels every owned job, terminating subprocess trees and
+// cleaning up orphans. JobSnapshot is read-only, with ownerSession for authorization
+// and association. Each job has one consuming output cursor.
 package jobs
 
 import (
@@ -20,23 +13,21 @@ import (
 	"github.com/herlanai/omnix/pkg/brand"
 )
 
-// ============================================================================
-// 类型
-// ============================================================================
+// Types.
 
-// JobKind 是生产者自定义的任务类型；registry 将每种视作不透明 id 命名空间。
+// JobKind is a producer-defined type treated as an opaque registry namespace.
 type JobKind string
 
-// 内置任务类型。
+// Built-in job kinds.
 const (
 	KindBash     JobKind = "bash"
 	KindSubagent JobKind = "subagent"
 )
 
-// JobStatus 是任务生命周期状态。
+// JobStatus is the lifecycle state of a job.
 type JobStatus string
 
-// 状态枚举。
+// Lifecycle states.
 const (
 	StatusRunning   JobStatus = "running"
 	StatusStopping  JobStatus = "stopping"
@@ -45,69 +36,69 @@ const (
 	StatusFailed    JobStatus = "failed"
 )
 
-// JobOutcome 是生产者通过 done 上报的终止结果。
+// JobOutcome is the terminal result reported through Done.
 type JobOutcome struct {
-	// Status 结束时状态：completed / killed / failed。
+	// Status is completed, killed, or failed at termination.
 	Status JobStatus `json:"status"`
-	// Detail 类型相关细节（如 "exit code: 3"）。
+	// Detail contains kind-specific information, such as exit code: 3.
 	Detail string `json:"detail,omitempty"`
-	// Output 无 readOutput 任务的最终输出；流式任务留空。
+	// Output is final output for jobs without ReadOutput; streaming jobs leave it empty.
 	Output string `json:"output,omitempty"`
 }
 
-// JobSnapshot 是单任务只读投影。
+// JobSnapshot is a read-only projection of one job.
 type JobSnapshot struct {
-	// ID registry 下发的 id（kind-N）。
+	// ID is assigned by the registry as kind-N.
 	ID brand.JobID `json:"id"`
-	// Kind 生产者类型。
+	// Kind identifies the producer type.
 	Kind JobKind `json:"kind"`
-	// Label 一行模型向标签。
+	// Label is a single-line model-facing label.
 	Label string `json:"label"`
-	// OwnerSession 用于授权与关联的 owner 会话 id；非空表示有主。
+	// OwnerSession identifies the owner for authorization and association; empty means unowned.
 	OwnerSession brand.SessionID `json:"ownerSession,omitempty"`
-	// Status 生命周期状态。
+	// Status is the lifecycle state.
 	Status JobStatus `json:"status"`
-	// Detail 状态细节。
+	// Detail provides state details.
 	Detail string `json:"detail,omitempty"`
-	// Output 当前可读输出（消耗当前游标之前的内容）。
+	// Output is currently readable output consumed through the current cursor.
 	Output string `json:"output,omitempty"`
 }
 
-// JobHooks 是 runtime 控制和观察生产者工作的钩子。
+// JobHooks lets the runtime control and observe producer work.
 type JobHooks struct {
-	// Cancel 请求终止；必须同步、幂等、最终结算 done。reason 将透传。
+	// Cancel requests termination with a forwarded reason; it must be synchronous,
+	// idempotent, and eventually settle Done.
 	Cancel func(reason string)
-	// Done 在生产者在释放资源后结算（而非仅工作结束）。
+	// Done settles after the producer releases resources, not merely when work ends.
 	Done chan JobOutcome
-	// ReadOutput 消费上次调用以来的输出；返回截断/溢出说明由生产者格式化。
+	// ReadOutput consumes output since the previous call; the producer formats truncation/spill details.
 	ReadOutput func() string
 }
 
-// JobStart 是生产者声明。
+// JobStart declares producer work.
 type JobStart struct {
-	// Kind 类型（也是 id 前缀）。
+	// Kind identifies the type and ID prefix.
 	Kind JobKind
-	// Label 一行模型向标签。
+	// Label is a single-line model-facing label.
 	Label string
-	// OwnerSession owner 会话 id（用于授权与 dispose 清理）；零值表示无主任务。
+	// OwnerSession authorizes and disposes jobs; zero means unowned.
 	OwnerSession brand.SessionID
-	// Run 在 preflight 后同步返回钩子；仅调用一次。返回 nil 表示启动失败且不留注册。
+	// Run returns hooks synchronously after preflight and is called once; nil means
+	// startup failed without leaving a registration.
 	Run func() *JobHooks
 }
 
-// ============================================================================
-// Job 与 Runtime
-// ============================================================================
+// Jobs and runtime.
 
-// Job 是单个后台任务。
+// Job represents a background task.
 type Job struct {
-	// ID 唯一任务 id。
+	// ID uniquely identifies the job.
 	ID brand.JobID
-	// Kind 类型。
+	// Kind identifies the job type.
 	Kind JobKind
-	// Label 标签。
+	// Label describes the job.
 	Label string
-	// OwnerSession owner 会话 id。
+	// OwnerSession identifies the owning session.
 	OwnerSession brand.SessionID
 
 	mu     sync.Mutex
@@ -117,11 +108,11 @@ type Job struct {
 	done   chan JobOutcome
 	read   func() string
 
-	// finished 在完成结算且从 registry 移除后关闭（供 owner dispose 等待清理完成）。
+	// finished closes after settlement and registry removal so owner disposal can await cleanup.
 	finished chan struct{}
 }
 
-// Snapshot 返回只读投影。
+// Snapshot returns a read-only projection.
 func (j *Job) Snapshot() JobSnapshot {
 	j.mu.Lock()
 	defer j.mu.Unlock()
@@ -140,7 +131,7 @@ func (j *Job) Snapshot() JobSnapshot {
 	}
 }
 
-// ReadOutput 消费增量输出。
+// ReadOutput consumes incremental output.
 func (j *Job) ReadOutput() string {
 	if j.read == nil {
 		return ""
@@ -148,7 +139,7 @@ func (j *Job) ReadOutput() string {
 	return j.read()
 }
 
-// Cancel 请求终止（幂等）。
+// Cancel requests termination idempotently.
 func (j *Job) Cancel(reason string) {
 	j.mu.Lock()
 	done := j.cancel
@@ -158,16 +149,16 @@ func (j *Job) Cancel(reason string) {
 	}
 }
 
-// Done 返回任务完成通知。
+// Done returns completion notification.
 func (j *Job) Done() <-chan JobOutcome { return j.done }
 
-// resolveOutcome 结算任务最终状态。
+// resolveOutcome settles the final job state.
 func (j *Job) resolveOutcome(o JobOutcome) {
 	j.mu.Lock()
 	j.status = o.Status
 	j.detail = o.Detail
 	if o.Output != "" {
-		// 无 readOutput 的任务最终输出。
+		// Final output for a job without ReadOutput.
 		j.read = func() string { return o.Output }
 	}
 	j.mu.Unlock()
@@ -177,7 +168,7 @@ func (j *Job) resolveOutcome(o JobOutcome) {
 	}
 }
 
-// Runtime 是后台任务运行时（ctx.jobs）。
+// Runtime implements background jobs (ctx.jobs).
 type Runtime struct {
 	mu     sync.Mutex
 	seq    int
@@ -185,12 +176,12 @@ type Runtime struct {
 	byKind map[string]int // kmd-N
 }
 
-// NewRuntime 创建任务运行时。
+// NewRuntime creates a job runtime.
 func NewRuntime() *Runtime {
 	return &Runtime{jobs: map[int]*Job{}, byKind: map[string]int{}}
 }
 
-// Start 启动一个任务。
+// Start starts a job.
 func (r *Runtime) Start(start JobStart) (*Job, error) {
 	if start.Run == nil {
 		return nil, fmt.Errorf("jobs: Run hook required")
@@ -218,7 +209,7 @@ func (r *Runtime) Start(start JobStart) (*Job, error) {
 	r.jobs[r.seq] = job
 	r.mu.Unlock()
 
-	// 异步结算：把钩子 done 映射到 job 状态并回收注册。
+	// Settle asynchronously: map Done to job state and remove its registration.
 	go func(j *Job, h *JobHooks) {
 		select {
 		case o := <-h.Done:
@@ -240,7 +231,7 @@ func (r *Runtime) unregister(id brand.JobID) {
 	}
 }
 
-// JobByID 按 id 查任务。
+// JobByID looks up a job by ID.
 func (r *Runtime) JobByID(id brand.JobID) *Job {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -252,7 +243,7 @@ func (r *Runtime) JobByID(id brand.JobID) *Job {
 	return nil
 }
 
-// ListByOwner 列出某 owner 下的全部任务（M46/S11）。
+// ListByOwner returns jobs belonging to an owner (M46/S11).
 func (r *Runtime) ListByOwner(owner brand.SessionID) []*Job {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -265,7 +256,7 @@ func (r *Runtime) ListByOwner(owner brand.SessionID) []*Job {
 	return out
 }
 
-// All 返回全部任务。
+// All returns all jobs.
 func (r *Runtime) All() []*Job {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -276,15 +267,15 @@ func (r *Runtime) All() []*Job {
 	return out
 }
 
-// DisposeOwner 在 owner Agent dispose 时调用：取消其名下全部任务并等待清理完成（M46）。
-// 孤儿进程由各任务的 cancel hook（子进程树终止）彻底清理；等到 finished 保证已从
-// 注册表移除、进程资源已释放。
+// DisposeOwner cancels an agent's jobs and waits for cleanup (M46). Cancel hooks
+// terminate subprocess trees; waiting for finished ensures registry removal and
+// resource release before disposal returns.
 func (r *Runtime) DisposeOwner(owner brand.SessionID, reason string) {
 	for _, j := range r.ListByOwner(owner) {
 		j.Cancel(reason)
-		<-j.finished // 等待任务终止并完成清理
+		<-j.finished // Wait for termination and cleanup.
 	}
 }
 
-// Finished 返回任务清理完成通知（外部等待用）。
+// Finished returns notification that cleanup is complete.
 func (j *Job) Finished() <-chan struct{} { return j.finished }

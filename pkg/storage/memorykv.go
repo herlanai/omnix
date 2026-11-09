@@ -1,4 +1,4 @@
-// 本文件实现 memorykv 后端：内存键值存储（测试与临时场景用）。
+// In-memory key-value storage for tests and temporary use.
 package storage
 
 import (
@@ -8,24 +8,24 @@ import (
 	"sync"
 )
 
-// memRecord 是内存中的单条记录。
+// memRecord holds an in-memory record.
 type memRecord struct {
 	data    []byte
 	version uint64
 }
 
-// MemoryKV 是基于内存 map 的 Backend 实现。
+// MemoryKV implements Backend with an in-memory map.
 type MemoryKV struct {
 	mu sync.RWMutex
 	m  map[string]*memRecord
 }
 
-// NewMemoryKV 创建空内存后端。
+// NewMemoryKV creates an empty in-memory backend.
 func NewMemoryKV() *MemoryKV {
 	return &MemoryKV{m: map[string]*memRecord{}}
 }
 
-// Get 实现 Backend。
+// Get implements Backend.
 func (m *MemoryKV) Get(ctx context.Context, key string) ([]byte, uint64, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -36,7 +36,7 @@ func (m *MemoryKV) Get(ctx context.Context, key string) ([]byte, uint64, error) 
 	return append([]byte(nil), rec.data...), rec.version, nil
 }
 
-// Put 实现 Backend（CAS 语义）。
+// Put implements Backend with CAS.
 func (m *MemoryKV) Put(ctx context.Context, key string, data []byte, expectedVersion uint64) (uint64, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -56,7 +56,7 @@ func (m *MemoryKV) Put(ctx context.Context, key string, data []byte, expectedVer
 	return rec.version, nil
 }
 
-// Delete 实现 Backend。
+// Delete implements Backend.
 func (m *MemoryKV) Delete(ctx context.Context, key string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -64,7 +64,7 @@ func (m *MemoryKV) Delete(ctx context.Context, key string) error {
 	return nil
 }
 
-// List 实现 Backend（字典序输出保证确定性）。
+// List implements Backend with deterministic lexical ordering.
 func (m *MemoryKV) List(ctx context.Context, prefix string) ([]string, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()

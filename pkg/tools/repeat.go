@@ -1,7 +1,6 @@
-// 本文件复刻官方 guard/repeat-tool-reminder 的纯逻辑部分：建议性连续重复调用检测。
-// 它不否决、不改写调用，只在模型连续以相同参数重复同一工具达到阈值时给出提醒，
-// 帮助打破"原地打转"。检测用的链键始终比较完整的规范化参数，避免属性顺序不同就
-// 被误判为不同调用。
+// Advisory repeat detection mirrors the upstream repeat-tool reminder. It never blocks or
+// rewrites calls; it emits reminders when consecutive calls use the same tool and arguments.
+// Full canonical arguments form the chain key so property-order changes do not evade detection.
 package tools
 
 import (
@@ -10,10 +9,10 @@ import (
 	"strings"
 )
 
-// DefaultRepeatThresholds 是默认触发阈值（温和 → 详细逐级升级）。
+// DefaultRepeatThresholds escalate from gentle to detailed reminders.
 var DefaultRepeatThresholds = []int{3, 5, 8}
 
-// canonicalValue 递归把值规范化：map 的 key 排序，slice 保持顺序。
+// canonicalValue recursively sorts map keys while preserving slice order.
 func canonicalValue(v any) any {
 	switch t := v.(type) {
 	case map[string]any:
@@ -38,7 +37,7 @@ func canonicalValue(v any) any {
 	}
 }
 
-// CanonicalizeArgs 返回参数的规范化字符串（深度 key 排序后序列化）。
+// CanonicalizeArgs serializes arguments with recursively sorted keys.
 func CanonicalizeArgs(input map[string]any) string {
 	b, err := json.Marshal(canonicalValue(input))
 	if err != nil {
@@ -47,13 +46,14 @@ func CanonicalizeArgs(input map[string]any) string {
 	return string(b)
 }
 
-// RepeatState 是单个代理的连续重复链状态。
+// RepeatState tracks one agent's consecutive repeated calls.
 type RepeatState struct {
 	lastKey string
 	count   int
 }
 
-// Observe 记录一次调用，返回当前连续相同调用次数（不同调用重置为 1）。
+// Observe records a call and returns its consecutive repetition count; a different call resets
+// the count to one.
 func (r *RepeatState) Observe(toolName string, args map[string]any) int {
 	key := toolName + "\x00" + CanonicalizeArgs(args)
 	if key == r.lastKey {
@@ -65,13 +65,14 @@ func (r *RepeatState) Observe(toolName string, args map[string]any) int {
 	return r.count
 }
 
-// Reset 清空链（用户插话后调用：跨插话的重复不算循环）。
+// Reset clears the chain after user input so repetitions across interruptions do not count as
+// loops.
 func (r *RepeatState) Reset() {
 	r.lastKey = ""
 	r.count = 0
 }
 
-// HitThreshold 判断次数是否命中某阈值。
+// HitThreshold reports whether the count matches a reminder threshold.
 func HitThreshold(count int, thresholds []int) bool {
 	for _, th := range thresholds {
 		if count == th {
@@ -81,11 +82,11 @@ func HitThreshold(count int, thresholds []int) bool {
 	return false
 }
 
-// GentleReminder 是首个阈值的温和提醒。
+// GentleReminder is the first-threshold reminder.
 const GentleReminder = "你在以完全相同的参数重复同一工具调用。请先仔细分析上一次结果，" +
 	"若任务未完成，换一种方式或换一组参数，而不是重复调用。"
 
-// DetailedReminder 生成后续阈值的详细提醒。
+// DetailedReminder builds the reminder for later thresholds.
 func DetailedReminder(toolName string, count int, canonical string, previewCap int) string {
 	preview := canonical
 	if previewCap > 0 && len(preview) > previewCap {

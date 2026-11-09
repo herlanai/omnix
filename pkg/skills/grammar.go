@@ -1,5 +1,6 @@
-// grammar.go 复刻官方 skill 的名称语法与模型面内容块渲染：kebab-case 名称校验，
-// 以及统一的 <skill_content> 块（资源提示 + 指令正文），转义内嵌文本防止越出框架。
+// Skill grammar matches upstream kebab-case names and skill_content rendering.
+// The block contains resource guidance and instructions; embedded text is escaped
+// to prevent it from breaking out of the wrapper.
 package skills
 
 import (
@@ -9,7 +10,7 @@ import (
 
 var skillName = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
 
-// IsName 判断是否合法 kebab-case skill 名称。
+// IsName validates a kebab-case skill name.
 func IsName(name string) bool { return skillName.MatchString(name) }
 
 func escapeText(s string) string {
@@ -22,8 +23,8 @@ func escapeAttr(s string) string {
 	return r.Replace(s)
 }
 
-// RenderContent 渲染统一的 skill_content 块。provider 说明资源由谁管理，body 为
-// 指令正文。
+// RenderContent renders a skill_content block; provider identifies the resource
+// manager and body contains instructions.
 func RenderContent(name, provider, body string) string {
 	var b strings.Builder
 	b.WriteString(`<skill_content name="`)

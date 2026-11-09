@@ -1,9 +1,5 @@
-// Package tests 的 N04（D3 纪律）验收测试。
-//
-// 覆盖：
-//   - CatalogText 跨 1000 次调用逐字节相同（无随机/时间戳）
-//   - 添加/删除 skill → CatalogHash 变化 → Injector 触发
-//   - skills 不变时 change-only 只注入 1 次（首次）
+// N04/D3 tests verify byte-identical catalogs over 1000 calls, hash changes and injection after
+// skill additions/removals, and a single initial injection for unchanged skills.
 package tests
 
 import (
@@ -14,7 +10,7 @@ import (
 	"github.com/herlanai/omnix/pkg/skills"
 )
 
-// TestN04CatalogStable 验证 CatalogText 跨 1000 次调用逐字节相同。
+// TestN04CatalogStable compares catalog bytes across 1000 calls.
 func TestN04CatalogStable(t *testing.T) {
 	root := t.TempDir()
 	r := skills.New(root)
@@ -35,13 +31,13 @@ func TestN04CatalogStable(t *testing.T) {
 			t.Fatalf("CatalogHash 不稳定")
 		}
 	}
-	// 字典序稳定：a 在 b 前。
+	// Stable lexical ordering puts a before b.
 	if indexOf(first, "a ") > indexOf(first, "b ") {
 		t.Fatalf("catalog 应按 name 字典序: %q", first)
 	}
 }
 
-// TestN04ChangeOnlyInject 验证添加/删除 skill → hash 变化 → 注入触发；不变时不重复注入。
+// TestN04ChangeOnlyInject injects after skill changes but skips unchanged catalogs.
 func TestN04ChangeOnlyInject(t *testing.T) {
 	root := t.TempDir()
 	r := skills.New(root)
@@ -50,13 +46,13 @@ func TestN04ChangeOnlyInject(t *testing.T) {
 	r.Scan()
 
 	in := skills.NewInjector(r)
-	// 首次注入。
+	// Initial injection.
 	content, injected := in.MaybeInject()
 	if !injected || content == "" {
 		t.Fatal("首次应注入")
 	}
-	// skills 不变 → 反复调用不重复注入。
-	for i := 0; i < 50; i++ { // 模拟 50 轮
+	// Repeated calls with unchanged skills must not reinject.
+	for i := 0; i < 50; i++ { // Simulate 50 turns.
 		if _, injected := in.MaybeInject(); injected {
 			t.Fatalf("skills 不变时第 %d 轮应不注入", i)
 		}
@@ -65,7 +61,7 @@ func TestN04ChangeOnlyInject(t *testing.T) {
 		t.Fatalf("应只注入 1 次, 实际 %d", in.InjectCount())
 	}
 
-	// 添加一个 skill → hash 变化 → 注入。
+	// Adding a skill changes the hash and triggers injection.
 	writeSkill(t, proj, "beta", "BBB")
 	r.Scan()
 	if _, injected := in.MaybeInject(); !injected {
@@ -75,7 +71,7 @@ func TestN04ChangeOnlyInject(t *testing.T) {
 		t.Fatalf("应有两次注入, 实际 %d", in.InjectCount())
 	}
 
-	// 删除 alpha → hash 变化 → 注入。
+	// Removing alpha changes the hash and triggers injection.
 	if err := os.Remove(filepath.Join(proj, "alpha.md")); err != nil {
 		t.Fatal(err)
 	}
@@ -85,7 +81,7 @@ func TestN04ChangeOnlyInject(t *testing.T) {
 	}
 }
 
-// TestN04InjectorBlockedInAvailableSkills 验证注入内容含 <available_skills> 区块。
+// TestN04InjectorBlockedInAvailableSkills verifies the available_skills block.
 func TestN04InjectorBlockedInAvailableSkills(t *testing.T) {
 	root := t.TempDir()
 	r := skills.New(root)

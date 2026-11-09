@@ -1,14 +1,8 @@
-// 本文件对应任务 N02（D1 纪律）：严格 append-only + 8 条不变量 day-1 校验。
-//
-// 对齐上游：packages/core/session + packages/core/compaction
-//
-// 设计要点：
-//   - Session 仅暴露 Append() 一个写路径；任何 in-place 修改由本文件提供的
-//     EnforceAppendOnly 契约 + 编译期只读视图（Events() 返回拷贝）共同拒绝；
-//   - SurfaceOp{op:replace,start,end,data} 是唯一的"写历史"合法方式，deriveMessages 读时替换
-//     **不修改**源事件（见 surface.go）；
-//   - VerifyInvariants 对整条日志跑 8 条 day-1 不变量；任何一条失败都会返回分类错误，
-//     供持久化/flush 前把关（调用方据策略拒绝 append 或登记 invariant ledger）。
+// This file defines append-only discipline and eight session invariants (N02),
+// following upstream session and compaction. Append is the only mutation path;
+// read views are copied. Surface replacement changes derived visibility, never
+// source events. VerifyInvariants returns classified failures for persistence
+// and checkpoint validation; callers may reject writes or record violations.
 package session
 
 import (
@@ -18,17 +12,13 @@ import (
 	"github.com/herlanai/omnix/pkg/brand"
 )
 
-// ============================================================================
-// D1-1：严格 append-only 契约
-// ============================================================================
+// D1-1: append-only contract.
 
-// AppendOnlyMarker 是 SessionLog 满足 append-only 的文档化标记（仅供声明，无运行时作用）。
+// AppendOnlyMarker documents SessionLog's append-only contract without runtime effects.
 const AppendOnlyMarker = "SessionLog exposes a single write path: Append(EventData)"
 
-// AppendOnly 验证传入的修改原语合法：仅允许 Append。
-//
-// 说明：SessionLog.Append 是唯一写入入口（M04 已实现）；本函数用作"在持久化/重放路径上
-// 把关不得有除 Append 外的写"的守卫，返回 nil 表示没有非法写路径被绕过。
+// AppendOnly permits only the Append mutation primitive. It guards persistence
+// and replay paths against bypassing the sole SessionLog write entry point.
 func AppendOnly(sl *SessionLog) error {
 	if sl == nil {
 		return fmt.Errorf("session: append-only check on nil log")
@@ -36,26 +26,24 @@ func AppendOnly(sl *SessionLog) error {
 	return nil
 }
 
-// ============================================================================
-// 8 条 day-1 不变量
-// ============================================================================
+// Eight baseline invariants.
 
-// InvariantCode 是不变量失败码。
+// InvariantCode identifies an invariant failure.
 type InvariantCode string
 
-// 8 条不变量。
+// The eight invariant codes.
 const (
-	InvSeqContinuous   InvariantCode = "seq_continuous"
-	InvTimeMonotonic   InvariantCode = "time_monotonic"
-	InvTurnPaired      InvariantCode = "turn_start_end_paired"
-	InvStepPaired      InvariantCode = "step_start_end_paired"
-	InvApprovalPaired  InvariantCode = "approval_asked_decided_paired"
-	InvGoalCAS         InvariantCode = "goal_revision_cas"
-	InvToolCallResult  InvariantCode = "tool_call_result_paired"
+	InvSeqContinuous    InvariantCode = "seq_continuous"
+	InvTimeMonotonic    InvariantCode = "time_monotonic"
+	InvTurnPaired       InvariantCode = "turn_start_end_paired"
+	InvStepPaired       InvariantCode = "step_start_end_paired"
+	InvApprovalPaired   InvariantCode = "approval_asked_decided_paired"
+	InvGoalCAS          InvariantCode = "goal_revision_cas"
+	InvToolCallResult   InvariantCode = "tool_call_result_paired"
 	InvFormatConsistent InvariantCode = "persistence_format_consistent"
 )
 
-// InvariantFailure 是一次不变量失败。
+// InvariantFailure describes one failed invariant.
 type InvariantFailure struct {
 	Code    InvariantCode
 	Message string
@@ -65,7 +53,7 @@ func (f InvariantFailure) Error() string {
 	return fmt.Sprintf("invariant [%s]: %s", f.Code, f.Message)
 }
 
-// VerifyInvariants 对事件日志跑全部 8 条不变量，返回失败列表（空表示全部通过）。
+// VerifyInvariants checks all eight invariants; an empty result means success.
 func VerifyInvariants(events []SessionEvent) []error {
 	var fails []error
 	fails = append(fails, checkSeqContinuous(events)...)
@@ -79,7 +67,7 @@ func VerifyInvariants(events []SessionEvent) []error {
 	return fails
 }
 
-// checkSeqContinuous 不变量 1：seq 严格 1..N 连续（表面替换事件除外）。
+// checkSeqContinuous checks contiguous sequence numbers, excluding surface replacements.
 func checkSeqContinuous(events []SessionEvent) []error {
 	seq := uint64(0)
 	var fails []error
@@ -87,7 +75,7 @@ func checkSeqContinuous(events []SessionEvent) []error {
 	_ = seen
 	for _, e := range events {
 		if e.SurfaceOp != nil {
-			continue // surface replace 不占普通 seq 连续位
+			continue // Surface replacements do not consume ordinary sequence positions.
 		}
 		if e.Type == EventSurfaceReplace {
 			continue
@@ -101,7 +89,7 @@ func checkSeqContinuous(events []SessionEvent) []error {
 	return fails
 }
 
-// checkTimeMonotonic 不变量 2：time 严格单调不减。
+// checkTimeMonotonic checks nondecreasing timestamps.
 func checkTimeMonotonic(events []SessionEvent) []error {
 	var fails []error
 	var last int64 = -1
@@ -119,7 +107,7 @@ func checkTimeMonotonic(events []SessionEvent) []error {
 	return fails
 }
 
-// checkTurnPaired 不变量 3：turn/start 与 turn/end 严格配对。
+// checkTurnPaired checks matching turn/start and turn/end events.
 func checkTurnPaired(events []SessionEvent) []error {
 	var fails []error
 	depth := 0
@@ -142,7 +130,7 @@ func checkTurnPaired(events []SessionEvent) []error {
 	return fails
 }
 
-// checkStepPaired 不变量 4：step/start 与 step/end 配对。
+// checkStepPaired checks matching step/start and step/end events.
 func checkStepPaired(events []SessionEvent) []error {
 	var fails []error
 	depth := 0
@@ -164,7 +152,7 @@ func checkStepPaired(events []SessionEvent) []error {
 	return fails
 }
 
-// checkApprovalPaired 不变量 5：approval/asked 与 approval/decided 配对。
+// checkApprovalPaired checks matching approval/asked and approval/decided events.
 func checkApprovalPaired(events []SessionEvent) []error {
 	var fails []error
 	open := map[string]bool{}
@@ -190,7 +178,7 @@ func checkApprovalPaired(events []SessionEvent) []error {
 	return fails
 }
 
-// checkGoalCAS 不变量 6：goal revision 严格单调递增（CAS）。
+// checkGoalCAS checks strictly increasing goal revisions.
 func checkGoalCAS(events []SessionEvent) []error {
 	var fails []error
 	rev := map[string]uint64{}
@@ -212,7 +200,7 @@ func checkGoalCAS(events []SessionEvent) []error {
 	return fails
 }
 
-// checkToolCallResult 不变量 7：tool/call 与 tool/result 配对（每个 call 恰一次 result/error）。
+// checkToolCallResult requires exactly one result or error for each tool call.
 func checkToolCallResult(events []SessionEvent) []error {
 	var fails []error
 	state := map[string]bool{}
@@ -248,7 +236,7 @@ func checkToolCallResult(events []SessionEvent) []error {
 	return fails
 }
 
-// checkFormatConsistent 不变量 8：所有事件类型都在 KNOWN 表内（格式一致）。
+// checkFormatConsistent checks that every event type is known.
 func checkFormatConsistent(events []SessionEvent) []error {
 	var fails []error
 	for _, e := range events {
@@ -260,7 +248,7 @@ func checkFormatConsistent(events []SessionEvent) []error {
 	return fails
 }
 
-// knownType 判断事件类型是否在 KNOWN_SESSION_EVENT_TYPES 白名单内。
+// knownType checks membership in the known event-type allowlist.
 func knownType(t EventType) bool {
 	for _, k := range knownSessionEventTypes {
 		if k == t {
@@ -270,7 +258,7 @@ func knownType(t EventType) bool {
 	return false
 }
 
-// knownSessionEventTypes 是白名单（与 format.go 的 KNOWN_SESSION_EVENT_TYPES 对齐）。
+// knownSessionEventTypes is the allowlist exposed by format.go.
 var knownSessionEventTypes []EventType
 
 func init() {

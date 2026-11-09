@@ -1,4 +1,4 @@
-// Package tests 的本地后端多探测链 + LocalProvider 验收测试。
+// Local sandbox backend probing and LocalProvider tests.
 package tests
 
 import (
@@ -8,7 +8,7 @@ import (
 	"github.com/herlanai/omnix/pkg/sandbox"
 )
 
-// TestLocalProviderBackendType 验证后端类型常量。
+// TestLocalProviderBackendType verifies backend constants.
 func TestLocalProviderBackendType(t *testing.T) {
 	if string(sandbox.BackendBwrap) != "bwrap" {
 		t.Fatal("BackendBwrap 应为 bwrap")
@@ -24,7 +24,7 @@ func TestLocalProviderBackendType(t *testing.T) {
 	}
 }
 
-// TestLocalProviderConfig 验证配置强制后端。
+// TestLocalProviderConfig verifies forced-backend configuration.
 func TestLocalProviderConfig(t *testing.T) {
 	p := sandbox.NewLocalProvider(&sandbox.LocalConfig{
 		RunnerCommand: "custom-runner",
@@ -38,10 +38,10 @@ func TestLocalProviderConfig(t *testing.T) {
 	}
 }
 
-// TestLocalProviderAvailable 验证可用检查。
+// TestLocalProviderAvailable checks backend availability.
 func TestLocalProviderAvailable(t *testing.T) {
 	p := sandbox.NewLocalProvider(nil)
-	// Windows 上 windows-acl 后端应该可用
+	// The windows-acl backend should be available on Windows.
 	if runtime.GOOS == "windows" {
 		if !p.Available() {
 			t.Fatal("Windows 上 windows-acl 后端应可用")
@@ -52,7 +52,7 @@ func TestLocalProviderAvailable(t *testing.T) {
 	}
 }
 
-// TestLocalProviderConfineWindowsACL 验证 Windows ACL 后端的 Confine。
+// TestLocalProviderConfineWindowsACL exercises Windows ACL confinement.
 func TestLocalProviderConfineWindowsACL(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		t.Skip("仅在 Windows 上测试 windows-acl")
@@ -77,7 +77,7 @@ func TestLocalProviderConfineWindowsACL(t *testing.T) {
 	}
 }
 
-// TestLocalProviderConfineCustomBwrap 验证自定义 bwrap 后端的 Confine 组装。
+// TestLocalProviderConfineCustomBwrap verifies custom bwrap command construction.
 func TestLocalProviderConfineCustomBwrap(t *testing.T) {
 	p := sandbox.NewLocalProvider(&sandbox.LocalConfig{
 		RunnerCommand: "bwrap",
@@ -94,11 +94,11 @@ func TestLocalProviderConfineCustomBwrap(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Confine 不应报错: %v", err)
 	}
-	// argv 应以 bwrap 开头
+	// The command must begin with bwrap.
 	if result.Argv[0] != "bwrap" {
 		t.Fatalf("argv[0] 应为 bwrap, 实际 %s", result.Argv[0])
 	}
-	// 应包含 -- 分隔符
+	// It must include the -- separator.
 	foundSep := false
 	for _, a := range result.Argv {
 		if a == "--" {
@@ -108,13 +108,13 @@ func TestLocalProviderConfineCustomBwrap(t *testing.T) {
 	if !foundSep {
 		t.Fatal("argv 应包含 -- 分隔符")
 	}
-	// 应以原始 argv 结尾
+	// It must end with the original arguments.
 	if result.Argv[len(result.Argv)-2] != "echo" || result.Argv[len(result.Argv)-1] != "hello" {
 		t.Fatalf("argv 应以 echo hello 结尾, 实际 %v", result.Argv)
 	}
 }
 
-// TestLocalProviderDenialSignatures 验证后端拒绝签名。
+// TestLocalProviderDenialSignatures checks backend denial signatures.
 func TestLocalProviderDenialSignatures(t *testing.T) {
 	p := sandbox.NewLocalProvider(&sandbox.LocalConfig{
 		RunnerCommand: "bwrap",
@@ -124,7 +124,7 @@ func TestLocalProviderDenialSignatures(t *testing.T) {
 	if len(sigs) == 0 {
 		t.Fatal("bwrap 应有拒绝签名")
 	}
-	// 应包含 Read-only file system
+	// Signatures must include Read-only file system.
 	found := false
 	for _, s := range sigs {
 		if s == "Read-only file system" {

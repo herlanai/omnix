@@ -1,17 +1,10 @@
-// Package subprocess 提供子进程（Subprocess）接缝。
-//
-// 对齐上游：packages/subprocess/subprocess + subprocess-local
-//
-// 本文件对应任务 M36：Subprocess 接缝。
-//
-// 设计要点：
-//   - SubprocessSpawnSpec 完全显式、不自带默认（argv/cwd/stdio/grace/env 全部给全）；
-//   - 托管 OMNIX_* 环境命名空间：spawn 时先 scrubbedParentEnv() 丢弃环境中的 OMNIX_* 名，
-//     再把调用方显式 env 合并上去（缺失的普通环境项也可用 tombstone 移除）；
-//   - CollectedOutput 报告每个流的截断与 spill 恢复状态：超过 maxBytes 保留 TAIL，
-//     并可在 spill 开启时把完整流写入 spill 文件；
-//   - 结束只在进程树上生效：terminate() 是唯一终止动词，树作用域；Windows 用
-//     taskkill /T，*nix 用 SIGTERM → grace → SIGKILL；子进程树全部清理无残留。
+// Package subprocess implements the M36 subprocess interface, matching subprocess
+// and subprocess-local. Specs explicitly describe argv, cwd, stdio, grace, and env.
+// Spawn removes inherited OMNIX_* variables, then merges explicit environment
+// entries; empty-value tombstones remove ordinary inherited variables too.
+// CollectedOutput retains the tail beyond memory limits and may spill the full
+// stream. Terminate acts on the process tree: taskkill /T on Windows, or SIGTERM,
+// a grace period, then SIGKILL on Unix.
 package subprocess
 
 import (
@@ -19,121 +12,117 @@ import (
 	"sync"
 )
 
-// ============================================================================
-// 类型
-// ============================================================================
+// Types.
 
-// CollectedOutput 是一条已捕获流的文本 + 恢复信息。
+// CollectedOutput contains captured text and recovery information.
 type CollectedOutput struct {
-	// Text 已收集文本——截断时为流的 TAIL。
+	// Text contains the collected stream tail when truncated.
 	Text string `json:"text"`
-	// Truncated 是否从 Text 中丢弃过字节。
+	// Truncated reports whether bytes were discarded from Text.
 	Truncated bool `json:"truncated"`
-	// SpillPath 当截断且可用时，含完整流的文件路径。
+	// SpillPath points to the full stream when truncation and spilling are available.
 	SpillPath string `json:"spillPath,omitempty"`
 }
 
-// SubprocessCollect 是一条输出流的受限内存收集配置（可选完整流 spill 文件）。
+// SubprocessCollect configures bounded in-memory collection and optional full-stream spilling.
 type SubprocessCollect struct {
-	// MaxBytes 内存上限/字节；溢出保留 TAIL。
+	// MaxBytes limits memory; overflow retains the tail.
 	MaxBytes int
-	// SpillMaxBytes 完整流 spill 上限；<=0 表示不启用 spill（仅诊断尾）。
+	// SpillMaxBytes limits full-stream storage; nonpositive disables spilling.
 	SpillMaxBytes int
 }
 
-// SubprocessStdinMode 是 stdin 布局：ignore 把 fd0 指向 /dev/null，pipe 暴露 stdin 流。
+// SubprocessStdinMode selects ignored stdin or a piped stream.
 type SubprocessStdinMode string
 
 const (
 	StdinIgnore SubprocessStdinMode = "ignore"
 	StdinPipe   SubprocessStdinMode = "pipe"
-	// StdinData 写入字节后即关闭（批处理形态）。
+	// StdinData writes bytes then closes stdin for batch execution.
 	StdinData = "data"
 )
 
-// SubprocessSpawnSpec 是完全独立决定的 spawn 请求（本接缝不自带默认）。
+// SubprocessSpawnSpec explicitly describes a spawn request.
 type SubprocessSpawnSpec struct {
-	// Argv 可执行程序与参数；程序是 argv[0]；此处绝不做 shell 解释。
+	// Argv contains executable argv[0] and arguments without shell interpretation.
 	Argv []string
-	// Cwd 子进程工作目录。
+	// Cwd is the child working directory.
 	Cwd string
-	// StdoutMaxBytes / StderrMaxBytes 收集模式内存上限；<=0 表示缺省 64KB。
+	// StdoutMaxBytes and StderrMaxBytes default to 64 KB when nonpositive.
 	StdoutMaxBytes int
 	StderrMaxBytes int
-	// SpillRoot 完整流 spill 根目录；空表示不启用 spill。
+	// SpillRoot is the complete-stream spill directory; empty disables spilling.
 	SpillRoot string
-	// GraceMs SIGTERM → SIGKILL 的宽限毫秒。
+	// GraceMs is the SIGTERM-to-SIGKILL grace period in milliseconds.
 	GraceMs int
-	// Env 合并到 scrubbedParentEnv 之上的显式环境条目。
+	// Env overlays explicit entries on the scrubbed parent environment.
 	Env map[string]string
-	// StdinData 给 stdin 的可选数据（非空时关闭 stdin）。
+	// StdinData optionally supplies input and closes stdin when nonempty.
 	StdinData string
 }
 
-// SubprocessOutcome 是已关闭进程的退出事实（不含超时/取消分类，调用方读它自有信号）。
+// SubprocessOutcome records exit facts; callers classify their own timeout/cancellation signals.
 type SubprocessOutcome struct {
-	// ExitCode 退出码；进程被信号杀死时为 -1。
+	// ExitCode is -1 when a signal terminates the process.
 	ExitCode int
-	// Signal 终止信号名（如 SIGTERM）；正常退出为空。
+	// Signal names the terminating signal, such as SIGTERM; empty on normal exit.
 	Signal string
 }
 
-// SubprocessHandle 是一个以自己进程树为根的活子进程。
+// SubprocessHandle represents a live process and its descendant tree.
 type SubprocessHandle struct {
-	// Pid 进程 id（树根）。
+	// Pid identifies the process-tree root.
 	Pid int
-	// collected 收集模式输出（offset-based 非消费读取）。
+	// collected provides offset-based, nonconsuming output reads.
 	collected *collectedOutputs
-	// done 进程关闭时解析为退出事实；spawn 级失败才 reject（用 err channel 表达）。
-	done     chan SubprocessOutcome
-	doneErr  chan error
-	termOnce sync.Once
+	// done reports exit facts; only spawn failures use the error channel.
+	done        chan SubprocessOutcome
+	doneErr     chan error
+	termOnce    sync.Once
 	terminateFn func()
 }
 
-// Collected 返回收集模式输出读取器（也可在退出后可读）。
+// Collected returns output readers that remain usable after exit.
 func (h *SubprocessHandle) Collected() *collectedOutputs { return h.collected }
 
-// Done 返回进程关闭时的退出事实。
+// Done returns process exit facts when it closes.
 func (h *SubprocessHandle) Done() <-chan SubprocessOutcome { return h.done }
 
-// Terminate 在进程树上开始 SIGTERM → grace → SIGKILL 升级（Windows 立即 force）。
-// 幂等；树消失后为 no-op。
+// Terminate escalates SIGTERM through grace to SIGKILL for the tree; Windows forces
+// termination immediately. It is idempotent and does nothing after the tree exits.
 func (h *SubprocessHandle) Terminate() {
 	h.termOnce.Do(h.terminateFn)
 }
 
-// ============================================================================
-// 收集输出读取器
-// ============================================================================
+// Collected-output readers.
 
-// collectedOutputs 保存 stdout/stderr 收集流。
+// collectedOutputs holds captured stdout and stderr.
 type collectedOutputs struct {
 	stdout *outputReader
 	stderr *outputReader
 }
 
-// Stdout 返回 stdout 读取器（spawn 时若为收集模式则非 nil）。
+// Stdout returns the stdout reader when collection was enabled.
 func (c *collectedOutputs) Stdout() *outputReader { return c.stdout }
 
-// Stderr 返回 stderr 读取器。
+// Stderr returns the stderr reader.
 func (c *collectedOutputs) Stderr() *outputReader { return c.stderr }
 
-// outputReader 是光标无关的增量输出读取器：offset 是整流字节坐标，由调用方持有，
-// 多个独立 reader 互不消费对方输出；readFrom(0) 是在定稿后的批量结果。
+// outputReader uses caller-owned whole-stream byte offsets. Independent readers
+// do not consume each other's data; readFrom(0) retrieves the finalized batch result.
 type outputReader struct {
-	mu       sync.Mutex
-	trunc    bytes.Buffer // 保留的 TAIL（或未截断时的全部）。
-	fullSpill string      // 完整流 spill 文件路径。
-	truncated bool        // 是否截断（溢出了内存窗）。
-	total     int         // 整流总字节数。
+	mu        sync.Mutex
+	trunc     bytes.Buffer // Retained tail, or the whole stream before truncation.
+	fullSpill string       // Full-stream spill path.
+	truncated bool         // Whether output exceeded the in-memory window.
+	total     int          // Total whole-stream byte count.
 }
 
 func (r *outputReader) readFrom(fromByte int) (text string, nextOffset int, lossy bool, spillPath string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.truncated {
-		// 请求 offset 滑出内存窗 → lossy，返回整个保留 TAIL。
+		// Offsets before the retained window are lossy; return the entire retained tail.
 		lossy = true
 		return r.trunc.String(), r.total, lossy, r.fullSpill
 	}
@@ -145,13 +134,13 @@ func (r *outputReader) readFrom(fromByte int) (text string, nextOffset int, loss
 	return string(delta), fromByte + len(delta), false, r.fullSpill
 }
 
-// ReadOutput 是一次增量读取（便捷方法）。
+// ReadOutput performs a convenient incremental read.
 func (r *outputReader) ReadOutput(from int) CollectedOutput {
 	text, _, lossy, spill := r.readFrom(from)
 	return CollectedOutput{Text: text, Truncated: lossy, SpillPath: spill}
 }
 
-// append 追加字节；超内存上限时切换到截断模式：保留 TAIL，可写 spill。
+// append adds bytes, retaining the tail and optionally spilling when memory is exceeded.
 func (r *outputReader) append(data []byte, memCap, spillCap int, spillDir string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -161,7 +150,7 @@ func (r *outputReader) append(data []byte, memCap, spillCap int, spillDir string
 	r.total += len(data)
 	switch {
 	case r.truncated:
-		// 已截断：继续把新字节 append 到 spill（若启用），并刷新 TAIL。
+		// After truncation, append new bytes to spill storage and refresh the tail.
 		if spillDir != "" {
 			r.fullSpill = writeSpillFile(spillDir, r.fullSpill, data)
 		}
@@ -171,7 +160,7 @@ func (r *outputReader) append(data []byte, memCap, spillCap int, spillDir string
 			r.trunc.Write(data)
 			return
 		}
-		// 溢出 → 截断：写入完整流 spill（若启用），刷新 TAIL。
+		// On overflow, spill the complete stream if enabled and refresh the tail.
 		if spillDir != "" {
 			r.fullSpill = writeSpillFile(spillDir, r.fullSpill, r.trunc.Bytes())
 			r.trunc.Reset()
@@ -184,7 +173,7 @@ func (r *outputReader) append(data []byte, memCap, spillCap int, spillDir string
 	}
 }
 
-// appendTail 维护截断模式下的内存 TAIL（保留最后 memCap 字节）。
+// appendTail retains the last memCap bytes in truncated mode.
 func (r *outputReader) appendTail(data []byte, memCap int) {
 	r.trunc.Write(data)
 	if r.trunc.Len() <= memCap {

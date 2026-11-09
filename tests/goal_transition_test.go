@@ -1,4 +1,4 @@
-// Package tests 的 goal 阶段迁移合法性验收测试。
+// Goal phase-transition validation tests.
 package tests
 
 import (

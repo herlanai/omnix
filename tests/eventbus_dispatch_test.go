@@ -1,10 +1,6 @@
-// Package tests 的事件总线（eventbus）验收测试。
-//
-// 覆盖 Cordis 四种同步分发模式在 Go 侧的对应契约：
-//   - Emit 广播：所有监听器执行，返回值忽略
-//   - Bail 保释：首个命中的监听器短路
-//   - Serial 串行：按注册顺序聚合返回值
-//   - On 返回的 dispose 摘除监听（对应插件卸载自动清理）
+// Event bus tests verify Emit broadcasts and ignores results, Bail short-circuits at the first
+// match, Serial aggregates in registration order, and On's disposer removes listeners for plugin
+// cleanup.
 package tests
 
 import (
@@ -30,10 +26,10 @@ func TestEventBusEmitRunsAll(t *testing.T) {
 func TestEventBusBailShortCircuits(t *testing.T) {
 	bus := eventbus.New[int, error]()
 	var reached int
-	bus.On(func(n int) error { reached = 1; return nil }) // 未命中
+	bus.On(func(n int) error { reached = 1; return nil }) // No match.
 	hit := errors.New("boom")
-	bus.On(func(n int) error { reached = 2; return hit }) // 命中并短路
-	bus.On(func(n int) error { reached = 3; return nil }) // 不应到达
+	bus.On(func(n int) error { reached = 2; return hit }) // Match and short-circuit.
+	bus.On(func(n int) error { reached = 3; return nil }) // Must not be reached.
 
 	r, ok := bus.Bail(7, func(e error) bool { return e != nil })
 
@@ -84,7 +80,7 @@ func TestEventBusDisposeIdempotent(t *testing.T) {
 	bus := eventbus.New[string, struct{}]()
 	dispose := bus.On(func(s string) struct{} { return struct{}{} })
 	dispose()
-	dispose() // 不应 panic
+	dispose() // Must not panic.
 	if bus.Len() != 0 {
 		t.Fatalf("double dispose should keep len 0, got %d", bus.Len())
 	}

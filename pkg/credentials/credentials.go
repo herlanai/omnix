@@ -1,15 +1,10 @@
-// Package credentials 提供凭证（Credentials）与授权流（Authorization Flow）接缝。
-//
-// 对齐上游：packages/credentials/credentials + credentials-local + authorization
-//
-// 设计要点：
-//   - CredentialRef 使用品牌化类型（POSIX 变量名，如 OPENAI_API_KEY），每轮 LLM 请求
-//     调用 Resolve 一次读取当前值，修改 env 后下一轮请求即看到新值；
-//   - 凭证记录通过 Storage Domain 持久化，修改携带 CAS 版本（record modify CAS），
-//     并发写冲突会被拒绝；
-//   - describe() 只暴露「是否有值 + 是否可写」，绝不输出明文；
-//   - AuthorizationFlow 注册后可 list/begin/cancel（OAuth 等外部流程的 stub 载体，
-//     S06 提供完整 stub 实现）。
+// Package credentials implements credentials and authorization flows, matching
+// credentials/credentials, credentials-local, and authorization upstream.
+// Resolve reads a branded POSIX variable reference before each LLM request, so
+// environment changes become visible on the next turn. Storage Domain persists
+// records with CAS versions and rejects concurrent write conflicts. Describe
+// exposes only presence and writability, never plaintext. Registered authorization
+// flows support list/begin/cancel; S06 adds the complete stub lifecycle.
 package credentials
 
 import (
@@ -22,24 +17,22 @@ import (
 	"github.com/herlanai/omnix/pkg/storage"
 )
 
-// ============================================================================
-// Store：凭证存储
-// ============================================================================
+// Credential storage.
 
-// envRecord 是持久化的凭证记录结构。
+// envRecord is the persisted credential record.
 type envRecord struct {
-	// Values 为 CredentialRef → 值 的映射。
+	// Values maps credential references to values.
 	Values map[string]string `json:"values"`
 }
 
-// Store 是凭证存储：内存缓存 + Storage Domain CAS 持久化。
+// Store combines cached credentials with Storage Domain CAS persistence.
 type Store struct {
 	mu       sync.Mutex
 	domain   *storage.Domain[envRecord]
-	writable map[string]bool // 记录哪些 ref 可写
+	writable map[string]bool // Track writable references.
 }
 
-// NewStore 创建凭证存储，backend 用于持久化（CAS 语义）。
+// NewStore creates a store using backend for CAS persistence.
 func NewStore(backend storage.Backend) *Store {
 	return &Store{
 		domain:   storage.NewDomain[envRecord](backend, "credentials"),
@@ -47,12 +40,12 @@ func NewStore(backend storage.Backend) *Store {
 	}
 }
 
-// NewMemoryStore 创建基于内存后端的凭证存储（测试/临时场景）。
+// NewMemoryStore creates an in-memory store for tests or temporary use.
 func NewMemoryStore() *Store {
 	return NewStore(storage.NewMemoryKV())
 }
 
-// load 读取当前记录（不存在则返回空记录）。
+// load reads the current record, returning an empty record when absent.
 func (s *Store) load() (envRecord, uint64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -69,14 +62,14 @@ func (s *Store) load() (envRecord, uint64) {
 	return rec, version
 }
 
-// Resolve 每请求解析一次 CredentialRef 的当前值（LLM 请求前调用）。
+// Resolve reads the current credential value once before each LLM request.
 func (s *Store) Resolve(ctx context.Context, ref brand.CredentialRef) (string, bool) {
 	rec, _ := s.load()
 	v, ok := rec.Values[ref.Raw()]
 	return v, ok
 }
 
-// Set 设置凭证（CAS：expectedVersion 来自最近一次 load；不匹配则失败）。
+// Set writes a credential using the last loaded CAS version; mismatches fail.
 func (s *Store) Set(ctx context.Context, ref brand.CredentialRef, value string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -95,7 +88,7 @@ func (s *Store) Set(ctx context.Context, ref brand.CredentialRef, value string) 
 	return nil
 }
 
-// Unset 删除凭证（CAS）。
+// Unset deletes a credential using CAS.
 func (s *Store) Unset(ctx context.Context, ref brand.CredentialRef) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -112,14 +105,14 @@ func (s *Store) Unset(ctx context.Context, ref brand.CredentialRef) error {
 	return err
 }
 
-// CredentialInfo 是 describe 输出的单条凭证描述（不含明文）。
+// CredentialInfo describes a credential without plaintext.
 type CredentialInfo struct {
 	Ref      brand.CredentialRef `json:"ref"`
 	Writable bool                `json:"writable"`
 	HasValue bool                `json:"hasValue"`
 }
 
-// Describe 输出凭证清单：只暴露 ref + writable + 是否有值，绝不输出明文。
+// Describe exposes references, writability, and presence, never plaintext.
 func (s *Store) Describe(ctx context.Context) []CredentialInfo {
 	rec, _ := s.load()
 	refs := make([]string, 0, len(rec.Values))
@@ -140,33 +133,33 @@ func (s *Store) Describe(ctx context.Context) []CredentialInfo {
 // AuthorizationFlow & AuthorizationService
 // ============================================================================
 
-// FlowID 是授权流的品牌化 ID。
+// FlowID is a branded authorization-flow identifier.
 type FlowID = brand.CredentialRef
 
-// Flow 描述一个授权流（如 OAuth 授权码流）。
+// Flow describes an authorization flow, such as OAuth authorization code.
 type Flow struct {
-	// ID 唯一标识。
+	// ID uniquely identifies the flow.
 	ID FlowID
-	// Name 人类可读名称。
+	// Name is human-readable.
 	Name string
-	// Begin 开始授权流，返回可用于完成授权的提示/URL（stub 可返回占位）。
+	// Begin returns a prompt or URL for completing authorization; stubs may use a placeholder.
 	Begin func(ctx context.Context) (string, error)
-	// Cancel 取消授权流。
+	// Cancel cancels the authorization flow.
 	Cancel func(ctx context.Context) error
 }
 
-// AuthorizationService 是授权流注册中心。
+// AuthorizationService registers authorization flows.
 type AuthorizationService struct {
 	mu    sync.RWMutex
 	flows map[string]*Flow
 }
 
-// NewAuthorizationService 创建授权服务。
+// NewAuthorizationService creates an authorization service.
 func NewAuthorizationService() *AuthorizationService {
 	return &AuthorizationService{flows: map[string]*Flow{}}
 }
 
-// Register 注册一个授权流。
+// Register registers an authorization flow.
 func (a *AuthorizationService) Register(f *Flow) error {
 	if f == nil || f.ID.Raw() == "" {
 		return fmt.Errorf("credentials: flow with empty id cannot register")
@@ -177,7 +170,7 @@ func (a *AuthorizationService) Register(f *Flow) error {
 	return nil
 }
 
-// List 列出全部已注册授权流。
+// List returns registered authorization flows.
 func (a *AuthorizationService) List() []*Flow {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
@@ -189,7 +182,7 @@ func (a *AuthorizationService) List() []*Flow {
 	return out
 }
 
-// Begin 启动指定授权流。
+// Begin starts the specified authorization flow.
 func (a *AuthorizationService) Begin(ctx context.Context, id FlowID) (string, error) {
 	a.mu.RLock()
 	f, ok := a.flows[id.Raw()]
@@ -203,7 +196,7 @@ func (a *AuthorizationService) Begin(ctx context.Context, id FlowID) (string, er
 	return f.Begin(ctx)
 }
 
-// Cancel 取消指定授权流。
+// Cancel cancels the specified authorization flow.
 func (a *AuthorizationService) Cancel(ctx context.Context, id FlowID) error {
 	a.mu.RLock()
 	f, ok := a.flows[id.Raw()]

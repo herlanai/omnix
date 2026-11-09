@@ -1,9 +1,6 @@
-// Package tests 的 writableRoots 与 canonicalPath 验收测试。
-//
-// 覆盖：
-//   - canonicalPath：符号链接解析、路径不存在时返回原路径
-//   - writableRoots：read-only 返回空；workspace-write 返回 [workspaceRoot, /tmp, os.TempDir()] 去重规范化
-//   - 与 FS 防护栏共享单一真相源的设计验证
+// Path tests cover symlink resolution with missing-path fallback, no writable roots for read-only,
+// normalized/deduplicated workspace and temporary roots for workspace-write, and shared root
+// semantics with filesystem guards.
 package tests
 
 import (
@@ -15,20 +12,20 @@ import (
 	"github.com/herlanai/omnix/pkg/sandbox"
 )
 
-// TestCanonicalPathExisting 验证存在路径的规范化。
+// TestCanonicalPathExisting normalizes an existing path.
 func TestCanonicalPathExisting(t *testing.T) {
 	dir := t.TempDir()
 	canonical := sandbox.CanonicalPath(dir)
 	if canonical == "" {
 		t.Fatal("canonicalPath 不应返回空")
 	}
-	// 规范化后路径应存在
+	// The normalized path must exist.
 	if _, err := os.Stat(canonical); err != nil {
 		t.Fatalf("规范化后路径应存在: %v", err)
 	}
 }
 
-// TestCanonicalPathMissing 验证路径不存在时返回原路径（保守策略）。
+// TestCanonicalPathMissing conservatively returns the original missing path.
 func TestCanonicalPathMissing(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "nonexistent", "path")
 	result := sandbox.CanonicalPath(missing)
@@ -37,7 +34,7 @@ func TestCanonicalPathMissing(t *testing.T) {
 	}
 }
 
-// TestWritableRootsReadOnly 验证 read-only 模式返回空列表。
+// TestWritableRootsReadOnly returns no writable roots.
 func TestWritableRootsReadOnly(t *testing.T) {
 	policy := sandbox.SandboxExecutionPolicy{
 		Mode:          sandbox.ModeReadOnly,
@@ -49,7 +46,7 @@ func TestWritableRootsReadOnly(t *testing.T) {
 	}
 }
 
-// TestWritableRootsDanger 验证 danger-full-access 模式返回空列表（绕过沙箱，不需要可写根）。
+// TestWritableRootsDanger returns no roots because danger-full-access bypasses confinement.
 func TestWritableRootsDanger(t *testing.T) {
 	policy := sandbox.SandboxExecutionPolicy{
 		Mode:          sandbox.ModeDangerFullAccess,
@@ -61,7 +58,7 @@ func TestWritableRootsDanger(t *testing.T) {
 	}
 }
 
-// TestWritableRootsWorkspaceWrite 验证 workspace-write 模式返回包含 workspaceRoot 和临时目录。
+// TestWritableRootsWorkspaceWrite includes the workspace and temporary directories.
 func TestWritableRootsWorkspaceWrite(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("Windows 上 /tmp 路径语义不同，跳过")
@@ -74,7 +71,7 @@ func TestWritableRootsWorkspaceWrite(t *testing.T) {
 	if len(roots) < 2 {
 		t.Fatalf("workspace-write 应至少返回 workspaceRoot 和 tmpdir, 实际 %v", roots)
 	}
-	// 验证包含 workspaceRoot
+	// The roots must include workspaceRoot.
 	foundWorkspace := false
 	for _, r := range roots {
 		if r == "/workspace/app" {
@@ -86,12 +83,12 @@ func TestWritableRootsWorkspaceWrite(t *testing.T) {
 	}
 }
 
-// TestWritableRootsDeduplication 验证重复路径被去重。
+// TestWritableRootsDeduplication removes duplicate paths.
 func TestWritableRootsDeduplication(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("Windows 上跳过")
 	}
-	// 当 workspaceRoot 等于 /tmp 时，不应重复出现
+	// If workspaceRoot equals /tmp, include it only once.
 	policy := sandbox.SandboxExecutionPolicy{
 		Mode:          sandbox.ModeWorkspaceWrite,
 		WorkspaceRoot: "/tmp",
@@ -106,7 +103,7 @@ func TestWritableRootsDeduplication(t *testing.T) {
 	}
 }
 
-// TestWritableRootsCanonical 验证返回的路径经过规范化。
+// TestWritableRootsCanonical returns normalized paths.
 func TestWritableRootsCanonical(t *testing.T) {
 	dir := t.TempDir()
 	policy := sandbox.SandboxExecutionPolicy{
@@ -114,7 +111,7 @@ func TestWritableRootsCanonical(t *testing.T) {
 		WorkspaceRoot: dir,
 	}
 	roots := sandbox.WritableRoots(policy)
-	// workspaceRoot 应被规范化
+	// Normalize workspaceRoot.
 	found := false
 	for _, r := range roots {
 		if r == sandbox.CanonicalPath(dir) {

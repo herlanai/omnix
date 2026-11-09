@@ -4,7 +4,7 @@ import "testing"
 
 func TestSectionsOrderThenName(t *testing.T) {
 	a := New()
-	// 同 order 下故意乱序注册。
+	// Register equal-order sections in deliberately scrambled order.
 	a.Register("zeta", 100, "z")
 	a.Register("alpha", 100, "a")
 	a.Register("first", 10, "f")

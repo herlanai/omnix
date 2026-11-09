@@ -1,14 +1,7 @@
-// 本文件对应 code-review 修复点 R06：goal 对齐官方四态/稳定错误码/BlockReason。
-//
-// 对照上游：packages/goal/goal/src/{types,domain}.ts
-//
-// 验证目标：
-//   1. Phase 四态含官方 paused（active/paused/blocked/complete），Valid 判别正确；
-//   2. GoalError 持稳定 Code + Cause 错误链（errors.Is/errors.As 可路由）；
-//   3. goal_set_phase 非法阶段 → GOAL_INVALID_TRANSITION；
-//   4. goal_set_max_rounds 非正数 → GOAL_INVALID_MAX_ROUNDS；
-//   5. goal_add_blocker / report_blocker 空原因 → GOAL_INVALID_BLOCK_REASON；
-//   6. report_blocker 置 blocked 时携带 BlockReason{code,message}（写回日志可读）。
+// R06 Goal compatibility tests verify active/paused/blocked/complete phases, stable GoalError
+// codes and routable causes, invalid-transition and max-round errors, rejection of empty blocker
+// reasons, and persistence of BlockReason{code,message} when reporting a blocker. Upstream:
+// packages/goal/goal/src/{types,domain}.ts.
 package tests
 
 import (
@@ -22,7 +15,7 @@ import (
 	"github.com/herlanai/omnix/pkg/tools"
 )
 
-// newGoalLog 造带一个 active 目标的 SessionLog。
+// newGoalLog creates a SessionLog containing an active goal.
 func newGoalLog(t *testing.T) *session.SessionLog {
 	t.Helper()
 	sl := session.NewSessionLog(brand.NewSessionID("r06-goal"))
@@ -34,7 +27,7 @@ func newGoalLog(t *testing.T) *session.SessionLog {
 	return sl
 }
 
-// pickTool 从工具集中按名取工具。
+// pickTool finds a tool by name.
 func pickTool(t *testing.T, sl *session.SessionLog, name string) *tools.Tool {
 	t.Helper()
 	for _, to := range goal.NewGoalToolset(sl).Tools() {
@@ -112,7 +105,7 @@ func TestR06ReportBlockerWritesBlockReason(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// 持久化的 goal 阶段=blocked，且 BlockReason 随事件持久化可读回（R06）。
+	// The persisted goal must be blocked with a readable BlockReason (R06).
 	g, ok := goal.FromLog(sl)
 	if !ok {
 		t.Fatal("after report_blocker, goal should still exist")

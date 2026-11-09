@@ -1,9 +1,5 @@
-// Package tests 的 LLM Retry（S15）验收测试。
-//
-// 覆盖：
-//   - 模拟 3 次 overload → 写 3 条 llm/retry 事件，第 4 次成功
-//   - 非可重试失败（refusal）不重试直接上抛
-//   - 超过 max 次 → 上抛错误（交 M34 request-error 瀑布）
+// S15 retry tests cover three overload failures with three retry events before success, immediate
+// propagation of non-retryable refusal, and exhaustion passed to the M34 request-error waterfall.
 package tests
 
 import (
@@ -16,7 +12,7 @@ import (
 	"github.com/herlanai/omnix/pkg/session"
 )
 
-// flakyAdapter 是可控制失败次数的假适配器：前 failTimes 次返回 overload，之后成功。
+// flakyAdapter returns overload for failTimes calls, then succeeds.
 type flakyAdapter struct {
 	mu        sync.Mutex
 	failTimes int
@@ -37,7 +33,7 @@ func (f *flakyAdapter) Chat(ctx context.Context, req llm.ChatRequest, cb func(ll
 	return llm.Usage{PromptTokens: 1, CompletionTokens: 1}, nil
 }
 
-// retryEventSink 收集 llm/retry 事件。
+// retryEventSink collects llm/retry events.
 type retryEventSink struct {
 	mu     sync.Mutex
 	events []session.LLMRetryData
@@ -55,7 +51,7 @@ func (s *retryEventSink) count() int {
 	return len(s.events)
 }
 
-// fastCfg 是测试用快速退避配置（无抖动保证确定性）。
+// fastCfg uses fast deterministic backoff without jitter.
 func fastCfg(maxAttempts int) llm.RetryConfig {
 	return llm.RetryConfig{
 		MaxAttempts: maxAttempts,
@@ -65,7 +61,7 @@ func fastCfg(maxAttempts int) llm.RetryConfig {
 	}
 }
 
-// TestLLMRetryWritesEventsAndSucceeds 验证 3 次失败写 3 条 retry 事件后第 4 次成功。
+// TestLLMRetryWritesEventsAndSucceeds records three retry events before succeeding on call four.
 func TestLLMRetryWritesEventsAndSucceeds(t *testing.T) {
 	inner := &flakyAdapter{failTimes: 3, failKind: llm.FailOverload}
 	sink := &retryEventSink{}
@@ -86,7 +82,7 @@ func TestLLMRetryWritesEventsAndSucceeds(t *testing.T) {
 	}
 }
 
-// TestLLMRetryNonRetryableNoRetry 验证非可重试失败不重试直接上抛。
+// TestLLMRetryNonRetryableNoRetry propagates non-retryable failures immediately.
 func TestLLMRetryNonRetryableNoRetry(t *testing.T) {
 	inner := &flakyAdapter{failTimes: 100, failKind: llm.FailResponseRefusal}
 	sink := &retryEventSink{}
@@ -96,7 +92,7 @@ func TestLLMRetryNonRetryableNoRetry(t *testing.T) {
 	if err == nil {
 		t.Fatal("refusal 应上抛错误")
 	}
-	// 只调用 1 次，无重试事件（refusal 不重试）。
+	// Refusal produces one call and no retry events.
 	if inner.calls != 1 {
 		t.Fatalf("refusal 不应重试, 调用 %d 次", inner.calls)
 	}
@@ -105,11 +101,11 @@ func TestLLMRetryNonRetryableNoRetry(t *testing.T) {
 	}
 }
 
-// TestLLMRetryExceedMaxReturnsError 验证超过 max 次失败 → 上抛错误（交 request-error 瀑布）。
+// TestLLMRetryExceedMaxReturnsError propagates exhaustion to the request-error waterfall.
 func TestLLMRetryExceedMaxReturnsError(t *testing.T) {
 	inner := &flakyAdapter{failTimes: 100, failKind: llm.FailOverload}
 	sink := &retryEventSink{}
-	mw := llm.NewRetryMiddleware(inner, fastCfg(2), sink.write) // max 2 次
+	mw := llm.NewRetryMiddleware(inner, fastCfg(2), sink.write) // Maximum of two attempts.
 
 	_, err := mw.Chat(context.Background(), llm.ChatRequest{}, func(llm.StreamChunk) {})
 	if err == nil {

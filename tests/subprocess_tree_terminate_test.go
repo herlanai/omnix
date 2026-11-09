@@ -1,10 +1,5 @@
-// Package tests 的子进程接缝（M36）验收测试。
-//
-// 覆盖：
-//   - scrubbedParentEnv：丢弃 OMNIX_* 环境项（子进程看不到）
-//   - CollectedOutput 超过阈值触发 Spill 写入（完整流可从 spill 还原）
-//   - 进程树终止（terminate 升级）后 Done 正常结算、进程被回收
-//   - 退出事实（exitCode）
+// M36 subprocess tests cover removal of OMNIX_* environment entries, truncated output with
+// complete spill recovery, process-tree termination and settlement, and exit codes.
 package tests
 
 import (
@@ -17,16 +12,16 @@ import (
 	"github.com/herlanai/omnix/pkg/subprocess"
 )
 
-// envHelper 构造一个打印 OMNIX_* 变量是否为空的命令（跨平台）。
+// envHelper builds a cross-platform command reporting whether OMNIX_* variables are absent.
 func envCheckArgv(varName string) []string {
 	if runtime.GOOS == "windows" {
-		// if defined 打印状态且始终退出 0。
+		// if defined prints the status and exits successfully.
 		return []string{"cmd", "/c", "if defined " + varName + " (echo PRESENT) else (echo EMPTY)"}
 	}
 	return []string{"sh", "-c", `if [ -z "$` + varName + `" ]; then echo EMPTY; else echo PRESENT; fi`}
 }
 
-// TestSubprocessScrubEnv 验证 OMNIX_* 环境项被 scrub 掉（子进程读不到）。
+// TestSubprocessScrubEnv removes OMNIX_* variables from child environments.
 func TestSubprocessScrubEnv(t *testing.T) {
 	t.Setenv("OMNIX_TEST_FACT", "secret")
 	rt := subprocess.NewLocal()
@@ -45,7 +40,8 @@ func TestSubprocessScrubEnv(t *testing.T) {
 	}
 }
 
-// TestSubprocessCollectedSpill 验证收集超过阈值 → 截断 + spill 含完整流。
+// TestSubprocessCollectedSpill truncates oversized collected output while retaining the complete
+// spill stream.
 func TestSubprocessCollectedSpill(t *testing.T) {
 	var argv []string
 	if runtime.GOOS == "windows" {
@@ -55,9 +51,9 @@ func TestSubprocessCollectedSpill(t *testing.T) {
 	}
 	rt := subprocess.NewLocal()
 	h := rt.Spawn(subprocess.SubprocessSpawnSpec{
-		Argv:          argv,
-		Cwd:           t.TempDir(),
-		StdoutMaxBytes: 1024, // 触发截断
+		Argv:           argv,
+		Cwd:            t.TempDir(),
+		StdoutMaxBytes: 1024, // Trigger truncation.
 		SpillRoot:      t.TempDir(),
 	})
 	res := <-h.Done()
@@ -71,7 +67,7 @@ func TestSubprocessCollectedSpill(t *testing.T) {
 	if co.SpillPath == "" {
 		t.Fatal("启用 spill 时应生成 spill 路径")
 	}
-	// 从 spill 还原（此处通过文解析器所在进程直接读文件验证完整性）。
+	// Read the spill file directly to verify the complete output.
 	data := readSpill(t, co.SpillPath)
 	if len(data) <= 1024 {
 		t.Fatalf("spill 应含完整流(>1KB), 实际 %d 字节", len(data))
@@ -87,7 +83,7 @@ func readSpill(t *testing.T, path string) []byte {
 	return b
 }
 
-// TestSubprocessTerminate 验证树终止升级后 Done 结算（进程被回收，非正常退出）。
+// TestSubprocessTerminate settles Done after process-tree termination and reaping.
 func TestSubprocessTerminate(t *testing.T) {
 	var argv []string
 	if runtime.GOOS == "windows" {
@@ -100,7 +96,7 @@ func TestSubprocessTerminate(t *testing.T) {
 	h.Terminate()
 	select {
 	case res := <-h.Done():
-		// 终止后退出码不应为 0（SIGKILL/强制终止）。
+		// Forced termination must produce a nonzero exit code.
 		if res.ExitCode == 0 {
 			t.Fatalf("终止后退出码不应为 0, 实际 %+v", res)
 		}
@@ -109,7 +105,7 @@ func TestSubprocessTerminate(t *testing.T) {
 	}
 }
 
-// TestSubprocessOutcomeSuccess 验证正常退出给出退出码 0。
+// TestSubprocessOutcomeSuccess reports exit code zero for normal completion.
 func TestSubprocessOutcomeSuccess(t *testing.T) {
 	var argv []string
 	if runtime.GOOS == "windows" {

@@ -1,4 +1,4 @@
-// Package tests 的沙箱不变量校验验收测试。
+// Sandbox invariant tests.
 package tests
 
 import (
@@ -7,17 +7,17 @@ import (
 	"github.com/herlanai/omnix/pkg/sandbox"
 )
 
-// TestInvariantValidMode 验证合法模式不 panic。
+// TestInvariantValidMode accepts valid modes without panic.
 func TestInvariantValidMode(t *testing.T) {
 	sandbox.InvariantEnabled = true
 	defer func() { sandbox.InvariantEnabled = true }()
-	// 不应 panic
+	// Must not panic.
 	sandbox.AssertValidMode(sandbox.ModeReadOnly)
 	sandbox.AssertValidMode(sandbox.ModeWorkspaceWrite)
 	sandbox.AssertValidMode(sandbox.ModeDangerFullAccess)
 }
 
-// TestInvariantInvalidMode 验证非法模式 panic。
+// TestInvariantInvalidMode panics for an invalid mode.
 func TestInvariantInvalidMode(t *testing.T) {
 	sandbox.InvariantEnabled = true
 	defer func() { sandbox.InvariantEnabled = true }()
@@ -29,22 +29,22 @@ func TestInvariantInvalidMode(t *testing.T) {
 	sandbox.AssertValidMode(sandbox.SandboxMode("invalid"))
 }
 
-// TestInvariantExecutionPolicy 校验 policy 字段一致性。
+// TestInvariantExecutionPolicy checks policy consistency.
 func TestInvariantExecutionPolicy(t *testing.T) {
 	sandbox.InvariantEnabled = true
 	defer func() { sandbox.InvariantEnabled = true }()
-	// workspace-write 必须有 root
+	// workspace-write requires a root.
 	sandbox.AssertExecutionPolicy(sandbox.SandboxExecutionPolicy{
 		Mode:          sandbox.ModeWorkspaceWrite,
 		WorkspaceRoot: "/workspace",
 	})
-	// read-only 可以没有 root
+	// read-only may omit the root.
 	sandbox.AssertExecutionPolicy(sandbox.SandboxExecutionPolicy{
 		Mode: sandbox.ModeReadOnly,
 	})
 }
 
-// TestInvariantExecutionPolicyNoRoot 校验 workspace-write 无 root 时 panic。
+// TestInvariantExecutionPolicyNoRoot panics for workspace-write without a root.
 func TestInvariantExecutionPolicyNoRoot(t *testing.T) {
 	sandbox.InvariantEnabled = true
 	defer func() { sandbox.InvariantEnabled = true }()
@@ -58,11 +58,11 @@ func TestInvariantExecutionPolicyNoRoot(t *testing.T) {
 	})
 }
 
-// TestInvariantDisabled 校验关闭不变量时不 panic。
+// TestInvariantDisabled skips validation when disabled.
 func TestInvariantDisabled(t *testing.T) {
 	sandbox.InvariantEnabled = false
 	defer func() { sandbox.InvariantEnabled = true }()
-	// 关闭后不应 panic
+	// Must not panic when disabled.
 	sandbox.AssertValidMode(sandbox.SandboxMode("invalid"))
 	sandbox.AssertExecutionPolicy(sandbox.SandboxExecutionPolicy{
 		Mode: sandbox.ModeWorkspaceWrite,

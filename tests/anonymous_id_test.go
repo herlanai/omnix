@@ -1,4 +1,4 @@
-// Package tests 的 telemetry 匿名 ID 验收测试。
+// Telemetry anonymous ID acceptance tests.
 package tests
 
 import (
@@ -17,7 +17,7 @@ func TestAnonymousIDCreateAndPersist(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// 文件应已持久化。
+	// The file must have been persisted.
 	raw, err := os.ReadFile(filepath.Join(dir, telemetry.AnonymousIDFileName))
 	if err != nil {
 		t.Fatalf("not persisted: %v", err)
@@ -25,7 +25,7 @@ func TestAnonymousIDCreateAndPersist(t *testing.T) {
 	if string(raw) != id1+"\n" {
 		t.Fatalf("persisted = %q", raw)
 	}
-	// 第二次读取应得到同一 ID。
+	// A second read must return the same ID.
 	id2, _ := telemetry.GetOrCreateAnonymousID(env)
 	if id1 != id2 {
 		t.Fatalf("id must be stable: %q vs %q", id1, id2)

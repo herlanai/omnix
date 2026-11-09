@@ -1,10 +1,6 @@
-// Package tests 的 N08（缓存破窗告警）验收测试。
-//
-// 覆盖：
-//   - 单次命中率突降 > 30% → warn 日志（含 session.id / current / previous）
-//   - 连续 5 次命中率 < 50% → error + webhook 触发
-//   - 命中率恢复后 consecutiveFails 重置为 0
-//   - 告警阈值可通过配置覆盖
+// N08 cache alert tests cover a hit-ratio drop greater than 30% producing a warning with
+// session/current/previous fields, five consecutive ratios below 50% producing an error and
+// webhook, recovery resetting the counter, and configurable thresholds.
 package tests
 
 import (
@@ -13,20 +9,20 @@ import (
 	"github.com/herlanai/omnix/pkg/llm"
 )
 
-// collectAlerts 收集告警的 sink。
+// collectAlerts collects alerts through a sink.
 type collectAlerts struct {
 	alerts []llm.Alert
 }
 
 func (c *collectAlerts) sink(a llm.Alert) { c.alerts = append(c.alerts, a) }
 
-// TestN08SuddenDropWarns 验证单次突降 > 30% → warn。
+// TestN08SuddenDropWarns warns on a drop greater than 30%.
 func TestN08SuddenDropWarns(t *testing.T) {
 	col := &collectAlerts{}
 	ca := llm.NewCacheAlert(col.sink)
-	// 先建立正常基线。
+	// Establish a normal baseline first.
 	ca.Observe("s1", 0.95)
-	// 突降到 0.3（降幅 0.65 > 0.3）→ warn。
+	// Drop to 0.3: the 0.65 decrease exceeds the 0.3 threshold.
 	ca.Observe("s1", 0.30)
 	var sawWarn bool
 	for _, a := range col.alerts {
@@ -42,7 +38,7 @@ func TestN08SuddenDropWarns(t *testing.T) {
 	}
 }
 
-// TestN08ConsecutiveFailsSignalsError 验证连续 5 次 < 50% → error + webhook。
+// TestN08ConsecutiveFailsSignalsError emits an error and webhook after five ratios below 50%.
 func TestN08ConsecutiveFailsSignalsError(t *testing.T) {
 	col := &collectAlerts{}
 	ca := llm.NewCacheAlert(col.sink)
@@ -63,16 +59,16 @@ func TestN08ConsecutiveFailsSignalsError(t *testing.T) {
 	}
 }
 
-// TestN08RecoveryResets 验证命中率恢复后 consecutiveFails 重置（不再立即 error）。
+// TestN08RecoveryResets clears consecutive failures after recovery.
 func TestN08RecoveryResets(t *testing.T) {
 	col := &collectAlerts{}
 	ca := llm.NewCacheAlert(col.sink)
-	// 3 次低（未达 5 次阈值）。
+	// Three low ratios remain below the five-failure threshold.
 	for i := 0; i < 3; i++ {
 		ca.Observe("s3", 0.10)
 	}
-	ca.Observe("s3", 0.90) // 恢复 → 重置
-	// 再来 4 次低（应累计到 4，未到 5 → 无 error）。
+	ca.Observe("s3", 0.90) // Recovery resets the counter.
+	// Four more low ratios reach four failures, still below the error threshold.
 	col.alerts = nil
 	errCount := 0
 	for i := 0; i < 4; i++ {
@@ -88,11 +84,11 @@ func TestN08RecoveryResets(t *testing.T) {
 	}
 }
 
-// TestN08ConfigOverridable 验证阈值可配置。
+// TestN08ConfigOverridable verifies configurable thresholds.
 func TestN08ConfigOverridable(t *testing.T) {
 	col := &collectAlerts{}
 	ca := &llm.CacheAlert{Threshold: 0.8, DropWarn: 0.1, ConsecutiveFails: 2, Sink: col.sink}
-	// 2 次命中率 0.75（<0.8）→ 触发 error。
+	// Two ratios of 0.75 below the 0.8 threshold trigger an error.
 	ca.Observe("s4", 0.75)
 	ca.Observe("s4", 0.75)
 	var sawError bool

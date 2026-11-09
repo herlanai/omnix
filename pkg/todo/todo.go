@@ -1,11 +1,7 @@
-// Package todo 提供 Todo 系统：整体替换写入语义。
-//
-// 对齐上游：packages/core/todo
-//
-// 设计要点：
-//   - todo/write 每次调用都整体替换当前待办列表（last-write-wins，不做增量 diff）；
-//   - 工具入口 TodoWriteTool 将 LLM 传回的待办列表经 JSON 校验后写入 SessionLog；
-//   - 读取一律通过 session.FoldTodoWrite 派生，保证热 append 与冷重放一致。
+// Package todo implements whole-list replacement, matching core/todo. Each
+// todo/write replaces the current list with last-write-wins semantics.
+// TodoWriteTool validates model JSON and writes a session event. Reads use
+// FoldTodoWrite so incremental appends and cold replay agree.
 package todo
 
 import (
@@ -17,33 +13,32 @@ import (
 	"github.com/herlanai/omnix/pkg/tools"
 )
 
-// TodoItem 是单个待办项。
-// TodoStatus 是待办三态生命周期（对齐官方 TodoItem.status）。
+// TodoStatus is the three-state todo lifecycle matching upstream TodoItem.status.
 type TodoStatus string
 
 const (
-	StatusPending    TodoStatus = "pending"     // 未开始
-	StatusInProgress TodoStatus = "in_progress" // 正在做
-	StatusCompleted  TodoStatus = "completed"   // 已完成
+	StatusPending    TodoStatus = "pending"     // Not started.
+	StatusInProgress TodoStatus = "in_progress" // In progress.
+	StatusCompleted  TodoStatus = "completed"   // Completed.
 )
 
-// Valid 返回状态是否为三态之一。
+// Valid checks whether the status is one of the three valid states.
 func (s TodoStatus) Valid() bool {
 	return s == StatusPending || s == StatusInProgress || s == StatusCompleted
 }
 
 type TodoItem struct {
-	// ID 稳定标识（整体替换时用于跨轮跟踪，官方不设；omnix 保留可选）。
+	// ID optionally tracks items across replacements; upstream does not require IDs.
 	ID string `json:"id,omitempty"`
-	// Content 待办内容。
+	// Content describes the todo.
 	Content string `json:"content"`
-	// Status 三态状态。
+	// Status is the three-state status.
 	Status TodoStatus `json:"status,omitempty"`
-	// Done 是否已完成（两态兼容字段；Status 为空时据此推导）。
+	// Done provides two-state compatibility when Status is empty.
 	Done bool `json:"done,omitempty"`
 }
 
-// ResolvedStatus 返回有效状态：优先 Status，否则由 Done 推导。
+// ResolvedStatus prefers Status, otherwise derives it from Done.
 func (it TodoItem) ResolvedStatus() TodoStatus {
 	if it.Status.Valid() {
 		return it.Status
@@ -54,35 +49,33 @@ func (it TodoItem) ResolvedStatus() TodoStatus {
 	return StatusPending
 }
 
-// TodoWriteTool 是 todo_write 工具定义。
-//
-//   - 入参为 { items: [{id?, content, done?}] }；
-//   - 调用即整体替换：当前列表被完全覆盖为本次传入的 items；
-//   - 执行时向 SessionLog 写入一条 todo/write 事件。
+// TodoWriteTool implements todo_write. Input contains items with optional IDs
+// and legacy done flags. Each call completely replaces the list and appends
+// a todo/write event to SessionLog.
 type TodoWriteTool struct {
-	// log 目标会话日志（写入 todo/write 事件）。
+	// log receives todo/write events.
 	log *session.SessionLog
-	// AllowParallel 是否允许多个 in_progress（默认 false：顺序工作）。
+	// AllowParallel permits multiple in_progress items; false defaults to sequential work.
 	AllowParallel bool
 }
 
-// NewTodoWriteTool 创建 todo_write 工具。
+// NewTodoWriteTool creates a todo_write tool.
 func NewTodoWriteTool(sl *session.SessionLog) *TodoWriteTool {
 	return &TodoWriteTool{log: sl}
 }
 
-// todoWriteInput 是工具入参结构。
+// todoWriteInput describes tool arguments.
 type todoWriteInput struct {
 	Items []TodoItem `json:"items"`
 }
 
-// Name 返回工具名。
+// Name returns the tool name.
 func (t *TodoWriteTool) Name() string { return "todo_write" }
 
-// Description 返回工具描述。
+// Description returns the tool description.
 func (t *TodoWriteTool) Description() string { return "整体替换当前待办列表" }
 
-// Execute 实现工具执行：整体替换待办列表并写入事件。
+// Execute replaces the todo list and writes its event.
 func (t *TodoWriteTool) Execute(ctx context.Context, input map[string]any) (any, error) {
 	raw, err := json.Marshal(input)
 	if err != nil {
@@ -93,13 +86,13 @@ func (t *TodoWriteTool) Execute(ctx context.Context, input map[string]any) (any,
 		return nil, fmt.Errorf("todo: invalid input: %w", err)
 	}
 
-	// 规范化：非空、去重、in_progress 数量约束。
+	// Validate nonblank, unique content and the active-item limit.
 	items, err := Normalize(in.Items, t.AllowParallel)
 	if err != nil {
 		return nil, err
 	}
 
-	// 构造持久化三态条目（同时回填 Items 兼容字段）。
+	// Build persisted three-state entries and the legacy Items field.
 	entries := make([]session.TodoEntry, len(items))
 	contents := make([]string, len(items))
 	for i, it := range items {
@@ -107,7 +100,7 @@ func (t *TodoWriteTool) Execute(ctx context.Context, input map[string]any) (any,
 		contents[i] = it.Content
 	}
 
-	// 写入 todo/write 事件（整体替换，last-write-wins）
+	// Emit todo/write as a last-write-wins whole-list replacement.
 	if _, err := t.log.Append(session.TodoWriteData{Items: contents, Entries: entries}); err != nil {
 		return nil, fmt.Errorf("todo: append: %w", err)
 	}
@@ -129,7 +122,7 @@ func (t *TodoWriteTool) Tool() *tools.Tool {
 	}
 }
 
-// Current 返回当前待办列表（通过 fold 派生，last-write-wins），优先三态。
+// Current derives the latest list through folding, preferring three-state entries.
 func Current(log *session.SessionLog) []TodoItem {
 	fold := session.FoldTodoWrite(log.Events())
 	if len(fold.Entries) > 0 {

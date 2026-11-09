@@ -1,7 +1,7 @@
-# omnix 文档站：Hugo 构建 + GitHub Pages 部署
+# omnix documentation: build with Hugo and deploy to GitHub Pages.
 #
-# 触发：推送到 master（含 site/ 变更）时构建并发布文档站
-# 产物：https://JopenChen.github.io/omnix/
+# Build and publish when a push to master changes the site.
+# Published site: https://JopenChen.github.io/omnix/
 name: Deploy omnix Docs
 
 on:
@@ -10,13 +10,13 @@ on:
     paths: ["site/**", ".github/workflows/pages.yml", ".gitmodules"]
   workflow_dispatch:
 
-# 权限：允许写入 Pages 并部署
+# Grant permissions to upload and deploy Pages artifacts.
 permissions:
   contents: read
   pages: write
   id-token: write
 
-# 同一时刻只跑一个部署
+# Allow only one deployment at a time.
 concurrency:
   group: pages
   cancel-in-progress: false
@@ -28,7 +28,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          # 拉取 submodule（Hextra 主题）
+          # Fetch the Hextra theme submodule.
           submodules: recursive
           fetch-depth: 0
 

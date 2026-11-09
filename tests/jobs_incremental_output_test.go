@@ -1,9 +1,5 @@
-// Package tests 的后台任务运行时（S11 + M46）验收测试。
-//
-// 覆盖：
-//   - S11：任务启动 + 增量输出读取 + 完成结算 + cancel
-//   - M46：owner 绑定，Agent dispose → 名下全部 Jobs 立刻 cancel（孤儿进程清理）
-//   - 手动钩子任务与子进程后端任务
+// S11/M46 background-job tests cover startup, incremental output, settlement, cancellation,
+// owner-bound cleanup on Agent disposal, and both manual hooks and subprocess backends.
 package tests
 
 import (
@@ -16,7 +12,7 @@ import (
 	"github.com/herlanai/omnix/pkg/jobs"
 )
 
-// TestJobsIncrementalOutput 验证任务增量输出读取（S11）。
+// TestJobsIncrementalOutput verifies incremental output reads (S11).
 func TestJobsIncrementalOutput(t *testing.T) {
 	var argv []string
 	if runtime.GOOS == "windows" {
@@ -63,7 +59,7 @@ func TestJobsIncrementalOutput(t *testing.T) {
 	}
 }
 
-// TestJobsListByOwner 验证按 owner 列出任务。
+// TestJobsListByOwner lists jobs by owner.
 func TestJobsListByOwner(t *testing.T) {
 	rt := jobs.NewRuntime()
 	for i := 0; i < 3; i++ {
@@ -75,17 +71,17 @@ func TestJobsListByOwner(t *testing.T) {
 	}
 }
 
-// TestJobsOwnerDisposeCancels 验证 M46：owner dispose → 名下全部 Jobs 立刻 cancel。
+// TestJobsOwnerDisposeCancels cancels all jobs owned by a disposed Agent (M46).
 func TestJobsOwnerDisposeCancels(t *testing.T) {
 	owner := brand.NewSessionID("owner-z")
 	rt := jobs.NewRuntime()
 	cancelled := make(chan struct{}, 2)
 
-	// 两个常驻任务（cancel hook 计数）。
+	// Create two persistent jobs and count cancel-hook calls.
 	_, _ = rt.Start(manualStart(jobs.KindBash, owner.Raw(), func() { cancelled <- struct{}{} }))
 	_, _ = rt.Start(manualStart(jobs.KindBash, owner.Raw(), func() { cancelled <- struct{}{} }))
 
-	// dispose owner → 全部 cancel 且等待 done。
+	// Dispose the owner, cancel every job, and wait for completion.
 	done := make(chan struct{})
 	go func() {
 		rt.DisposeOwner(owner, "owner disposed")
@@ -96,7 +92,7 @@ func TestJobsOwnerDisposeCancels(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("DisposeOwner 未在超时内完成")
 	}
-	// 两个任务都收到 cancel。
+	// Both jobs must receive cancellation.
 	count := 0
 	for i := 0; i < 2; i++ {
 		select {
@@ -108,13 +104,13 @@ func TestJobsOwnerDisposeCancels(t *testing.T) {
 	if count != 2 {
 		t.Fatalf("dispose 应 cancel 全部 2 个任务, 实际 %d", count)
 	}
-	// 完成后任务从 registry 移除。
+	// Completed jobs are removed from the registry.
 	if jobs := rt.ListByOwner(owner); len(jobs) != 0 {
 		t.Fatalf("dispose 后 owner 名下列表应为空, 实际 %d", len(jobs))
 	}
 }
 
-// TestJobsOwnerDisposeSubprocessCleanup 验证 dispose 时子进程任务被树终止清理（M46 孤儿清理）。
+// TestJobsOwnerDisposeSubprocessCleanup terminates subprocess trees during owner disposal.
 func TestJobsOwnerDisposeSubprocessCleanup(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("依赖 sh")
@@ -144,7 +140,7 @@ func TestJobsOwnerDisposeSubprocessCleanup(t *testing.T) {
 	}
 }
 
-// manualStart 构造一个带手动 cancel 钩子的任务启动函数。
+// manualStart constructs a job starter with a manual cancellation hook.
 func manualStart(kind jobs.JobKind, ownerID string, onCancel func()) jobs.JobStart {
 	owner := brand.NewSessionID(ownerID)
 	done := make(chan jobs.JobOutcome, 1)
@@ -154,7 +150,7 @@ func manualStart(kind jobs.JobKind, ownerID string, onCancel func()) jobs.JobSta
 		OwnerSession: owner,
 		Run: func() *jobs.JobHooks {
 			return &jobs.JobHooks{
-				// Cancel：先回调计数，再结算 killed，使 DisposeOwner 的 <-Done() 能返回。
+				// Cancel increments the counter and settles the job as killed so DisposeOwner can finish waiting.
 				Cancel: func(reason string) {
 					onCancel()
 					select {
@@ -162,7 +158,7 @@ func manualStart(kind jobs.JobKind, ownerID string, onCancel func()) jobs.JobSta
 					default:
 					}
 				},
-				Done:        done,
+				Done:       done,
 				ReadOutput: func() string { return "" },
 			}
 		},

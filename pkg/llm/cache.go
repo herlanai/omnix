@@ -1,13 +1,8 @@
-// 本文件对应任务 N01：DeepSeek Prefix Cache 探针埋点（阶段 0 前置基础设施）。
-//
-// 对齐上游：DeepSeek API docs（KV cache）+ 本地衍生。
-//
-// 设计要点：
-//   - CacheStats 聚合每请求的 prompt_cache_hit_tokens / prompt_cache_miss_tokens；
-//   - ComputeHitRatio() 计算命中率 = hit/(hit+miss)，在总量为 0 或全命中/全未命中时
-//     都能给出确定值（防 0/0 → NaN）；
-//   - CacheLogLine 生成每次 LLM 请求日志行所需字段 cache.hit_ratio=...，
-//     供观测/告警（N08）与 N 簇全部验收作为数据基线。
+// This file implements DeepSeek prefix-cache instrumentation (N01), following
+// the API's KV-cache usage fields. CacheStats aggregates hit/miss tokens;
+// ComputeHitRatio handles empty, all-hit, and all-miss usage without NaN.
+// CacheLogLine provides cache.hit_ratio for monitoring, N08 alerts, and
+// the cache acceptance-test baseline.
 package llm
 
 import (
@@ -15,27 +10,27 @@ import (
 	"sync"
 )
 
-// CacheStats 是一次或累计的 prefix cache 用量聚合。
+// CacheStats aggregates prefix-cache usage for one or more requests.
 type CacheStats struct {
-	// HitTokens 命中缓存的 prompt token 数。
+	// HitTokens counts prompt tokens served from cache.
 	HitTokens int `json:"hitTokens"`
-	// MissTokens 未命中缓存的 prompt token 数。
+	// MissTokens counts prompt tokens not served from cache.
 	MissTokens int `json:"missTokens"`
 }
 
-// Add 累加一次用量。
+// Add accumulates one usage record.
 func (c *CacheStats) Add(hit, miss int) {
 	c.HitTokens += hit
 	c.MissTokens += miss
 }
 
-// Total 返回总 prompt token（hit + miss）。
+// Total returns hit plus miss prompt tokens.
 func (c *CacheStats) Total() int {
 	return c.HitTokens + c.MissTokens
 }
 
-// ComputeHitRatio 计算命中率，防 0/0×NaN：
-//   - 总量为 0 → 0.0；全命中 → 1.0；全未命中 → 0.0；部分命中 → hit/total。
+// ComputeHitRatio returns hit/total, or zero for empty usage.
+// All hits yield one and all misses yield zero; the result is never 0/0.
 func (c *CacheStats) ComputeHitRatio() float64 {
 	total := c.Total()
 	if total <= 0 {
@@ -44,62 +39,59 @@ func (c *CacheStats) ComputeHitRatio() float64 {
 	return float64(c.HitTokens) / float64(total)
 }
 
-// HitRatioOf 从一次 llm.Usage 直接求命中率（便捷方法）。
+// HitRatioOf computes the cache hit ratio directly from Usage.
 func HitRatioOf(u Usage) float64 {
 	cs := CacheStats{HitTokens: u.PromptCacheHitTokens, MissTokens: u.PromptCacheMissTokens}
 	return cs.ComputeHitRatio()
 }
 
-// CacheLogLine 生成一次请求日志行的命中率字段（"cache.hit_ratio=0.95"）。
-// 用于每次 LLM 请求日志行；作为 N01 验收的采集基线。
+// CacheLogLine formats a request log field such as cache.hit_ratio=0.95
+// for N01 instrumentation and monitoring.
 func CacheLogLine(u Usage) string {
 	return fmt.Sprintf("cache.hit_ratio=%.3f", HitRatioOf(u))
 }
 
-// RecordCacheUsage 简便地把一次用量记入累计 stats（供 tokenmeter/观测聚合）。
+// RecordCacheUsage adds usage to cumulative statistics for metering and monitoring.
 func (c *CacheStats) RecordUsage(u Usage) {
 	c.Add(u.PromptCacheHitTokens, u.PromptCacheMissTokens)
 }
 
-// ============================================================================
-// N08：缓存破窗告警（CacheAlert）
-// ============================================================================
+// N08: cache hit-rate degradation alerts.
 
-// AlertLevel 是告警级别。
+// AlertLevel identifies alert severity.
 type AlertLevel string
 
-// 告警级别。
+// Alert severity levels.
 const (
 	AlertWarn  AlertLevel = "warn"
 	AlertError AlertLevel = "error"
 )
 
-// Alert 是一次缓存破窗告警。
+// Alert describes a cache hit-rate degradation alert.
 type Alert struct {
-	// Level 级别。
+	// Level identifies severity.
 	Level AlertLevel `json:"level"`
-	// Message 告警内容（含 session.id / current / previous）。
+	// Message includes session ID and current/previous ratios.
 	Message string `json:"message"`
-	// Webhook 是否应触发 webhook 通知（连续破窗时）。
+	// Webhook requests notification after consecutive failures.
 	Webhook bool `json:"webhook,omitempty"`
 }
 
-// AlertSink 是告警输出回调（日志/webhook）。
+// AlertSink delivers alerts to logging or webhook handlers.
 type AlertSink func(a Alert)
 
-// CacheAlert 检测缓存命中率破窗并分级告警。
-//
-//   - 单次命中率突降 > DropWarn 相比上一次 → warn（记录 session/current/previous）；
-//   - 连续 consecutiveFails 次命中率 < Threshold → error + 可选 webhook；
-//   - 命中率恢复（≥ Threshold）→ consecutiveFails 重置为 0。
+// CacheAlert detects and classifies cache hit-rate degradation. A drop larger
+// than DropWarn emits a warning with session/current/previous values.
+// ConsecutiveFails observations below Threshold emit an error and optional
+// webhook notification. Recovery to Threshold resets the consecutive count.
 type CacheAlert struct {
-	// Threshold 低命中率阈值（默认 0.5）。
+	// Threshold is the low hit-rate threshold; the default is 0.5.
 	Threshold float64
-	// DropWarn 单次相对骤降阈值（默认 0.3）。
+	// DropWarn is the sudden-drop threshold relative to the previous ratio; default 0.3.
 	DropWarn float64
-	// ConsecutiveFails 连续低于阈值触发 error 的次数（默认 5）。
+	// ConsecutiveFails is the number of low ratios before an error; default five.
 	ConsecutiveFails int
-	// Sink 告警输出。
+	// Sink receives alerts.
 	Sink AlertSink
 
 	mu               sync.Mutex
@@ -109,7 +101,7 @@ type CacheAlert struct {
 	alerts           []Alert
 }
 
-// NewCacheAlert 创建默认配置的破窗告警。
+// NewCacheAlert creates an alert detector with default settings.
 func NewCacheAlert(sink AlertSink) *CacheAlert {
 	return &CacheAlert{
 		Threshold:        0.5,
@@ -119,13 +111,12 @@ func NewCacheAlert(sink AlertSink) *CacheAlert {
 	}
 }
 
-// Observe 记录一次命中率并判定是否告警。
-// sessionID 用于告警上下文。
+// Observe records a ratio and emits any alerts, using sessionID as context.
 func (a *CacheAlert) Observe(sessionID string, ratio float64) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	// 单次骤降告警（相对上一次）。
+	// Warn about a sudden drop from the previous observation.
 	if a.hasPrev && a.prevRatio-ratio > a.DropWarn {
 		alert := Alert{Level: AlertWarn,
 			Message: "cache hit ratio dropped: session=" + sessionID +
@@ -133,7 +124,7 @@ func (a *CacheAlert) Observe(sessionID string, ratio float64) {
 		a.emit(alert, false)
 	}
 
-	// 连续低命中率告警。
+	// Alert after consecutive low hit ratios.
 	if ratio < a.Threshold {
 		a.consecutiveFails++
 		if a.consecutiveFails >= a.ConsecutiveFails {
@@ -141,7 +132,7 @@ func (a *CacheAlert) Observe(sessionID string, ratio float64) {
 				Message: "cache hit ratio persistently low: session=" + sessionID +
 					" consecutive=" + itoa2(a.consecutiveFails) + " ratio=" + ft(ratio)}
 			a.emit(alert, true)
-			a.consecutiveFails = 0 // 每次 error 重置（或按需保持）
+			a.consecutiveFails = 0 // Reset the counter after each error alert.
 		}
 	} else {
 		a.consecutiveFails = 0
@@ -159,7 +150,7 @@ func (a *CacheAlert) emit(al Alert, webhook bool) {
 	}
 }
 
-// Alerts 返回累计告警快照。
+// Alerts returns a snapshot of accumulated alerts.
 func (a *CacheAlert) Alerts() []Alert {
 	a.mu.Lock()
 	defer a.mu.Unlock()

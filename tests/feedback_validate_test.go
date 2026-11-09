@@ -1,4 +1,4 @@
-// Package tests 的 feedback 值约束验收测试。
+// Feedback value-validation tests.
 package tests
 
 import (

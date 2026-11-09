@@ -1,9 +1,5 @@
-// Package tests 的 N03（D2 纪律）验收测试。
-//
-// 覆盖：
-//   - 纯函数：同一组装器 1000 次渲染逐字节相同（含系统哈希稳定）
-//   - 静态检测捕获反模式（time.Now / os.Getwd / rand）
-//   - 干净 section 通过检测（0 violation）
+// N03/D2 tests verify byte-identical rendering and system hashes across 1000 calls, detection of
+// time/working-directory/randomness antipatterns, and clean sections with no violations.
 package tests
 
 import (
@@ -12,7 +8,7 @@ import (
 	"github.com/herlanai/omnix/pkg/sysprompt"
 )
 
-// TestN03SystemPromptPureFunction 验证 1000 次渲染逐字节相同（纯函数证明）。
+// TestN03SystemPromptPureFunction compares 1000 byte-identical renderings.
 func TestN03SystemPromptPureFunction(t *testing.T) {
 	a := sysprompt.New()
 	a.Register("persona", sysprompt.SectionOrderPersona, "You are a helpful agent.")
@@ -31,10 +27,10 @@ func TestN03SystemPromptPureFunction(t *testing.T) {
 	}
 }
 
-// TestN03StaticCheckCatchesBanned 验证静态检测捕获反模式。
+// TestN03StaticCheckCatchesBanned detects forbidden patterns.
 func TestN03StaticCheckCatchesBanned(t *testing.T) {
-	bad := `Today is ` + "`time.Now()`" + ` in $(os.Getwd())` // 显式以反模式表示
-	// 构造触发文本。
+	bad := `Today is ` + "`time.Now()`" + ` in $(os.Getwd())` // Express the antipattern explicitly.
+	// Construct text that triggers detection.
 	dirty := "const now = time.Now(); const cwd = os.Getwd(); use math/rand"
 	violations := sysprompt.StaticCheck(dirty)
 	if len(violations) == 0 {
@@ -46,7 +42,7 @@ func TestN03StaticCheckCatchesBanned(t *testing.T) {
 	_ = bad
 }
 
-// TestN03StaticCheckClean 验证干净 section 通过检测（0 violation）。
+// TestN03StaticCheckClean reports no violations for a clean section.
 func TestN03StaticCheckClean(t *testing.T) {
 	clean := "You are a helpful assistant. Follow the workspace policy."
 	if v := sysprompt.StaticCheck(clean); len(v) != 0 {
@@ -57,19 +53,18 @@ func TestN03StaticCheckClean(t *testing.T) {
 	}
 }
 
-// TestN03CheckSections 验证整组装器级别检测。
+// TestN03CheckSections checks the entire assembler.
 func TestN03CheckSections(t *testing.T) {
 	a := sysprompt.New()
 	a.Register("persona", sysprompt.SectionOrderPersona, "You are helpful.")
 	a.Register("bad", sysprompt.SectionOrderPolicy, "os.Gos.Getwd() dynamic")
 	_, forbidden := sysprompt.CheckSections(a)
 	_ = forbidden
-	// 该 section 含 os.Getwd，应 forbidden=true。
-	// 修正文本后再检查。
+	// The os.Getwd section must be forbidden; recheck after correcting it.
 	if !forbidden {
 		t.Fatal("含反模式 section 应 forbidden")
 	}
-	// 移除后应干净。
+	// Removing the section must leave no violations.
 	a.Unregister("bad")
 	viol, forb := sysprompt.CheckSections(a)
 	if len(viol) != 0 || forb {
@@ -77,12 +72,12 @@ func TestN03CheckSections(t *testing.T) {
 	}
 }
 
-// TestN03OrderConst 验证 order 写死为常量（不可被运行时覆盖语义）。
+// TestN03OrderConst checks fixed section-order values.
 func TestN03OrderConst(t *testing.T) {
 	if sysprompt.SectionOrderPersona >= sysprompt.SectionOrderPolicy {
 		t.Fatal("persona(100) 应小于 policy(200)")
 	}
-	// Assembler 以传入 order 为准但 Section 只读取常量式字段。
+	// Assembler uses the supplied order; sections expose constant-style order fields.
 	a := sysprompt.New()
 	a.Register("policy", sysprompt.SectionOrderPolicy, "p")
 	s := a.Sections()[0]

@@ -1,4 +1,4 @@
-// 本文件对应任务 M04：Session 事件溯源（append 严格不变量校验）。
+// M04 session append invariant tests.
 package tests
 
 import (
@@ -8,8 +8,7 @@ import (
 	"github.com/herlanai/omnix/pkg/session"
 )
 
-// appendTurn 便捷构造一段完整合法 Turn（start → step → step/end → end）。
-// turnIdx 是当前 turn 的编号（从 0 开始）。
+// appendTurn constructs a valid start/step/step-end/turn-end sequence; turnIdx is zero-based.
 func appendTurn(sl *session.SessionLog, turnIdx uint64) error {
 	if _, err := sl.Append(session.TurnStartData{Turn: turnIdx}); err != nil {
 		return err
@@ -27,7 +26,7 @@ func appendTurn(sl *session.SessionLog, turnIdx uint64) error {
 	return err
 }
 
-// TestSessionAppendSeqContinuous 验证 seq 严格 1..N 连续。
+// TestSessionAppendSeqContinuous verifies contiguous sequence numbers from 1 through N.
 func TestSessionAppendSeqContinuous(t *testing.T) {
 	sl := session.NewSessionLog(brand.NewSessionID("s1"))
 
@@ -49,72 +48,72 @@ func TestSessionAppendSeqContinuous(t *testing.T) {
 	}
 }
 
-// TestSessionTurnPairing 验证 turn/end 无前 turn/start 被拒绝。
+// TestSessionTurnPairing rejects turn/end without turn/start.
 func TestSessionTurnPairing(t *testing.T) {
 	sl := session.NewSessionLog(brand.NewSessionID("s1"))
 
-	// turn/end 没有前置 turn/start → 拒绝
+	// Reject turn/end without a preceding turn/start.
 	if _, err := sl.Append(session.TurnEndData{Turn: 0, Reason: session.ReasonFinished}); err == nil {
 		t.Fatal("无 turn/start 的 turn/end 应被拒绝")
 	}
 
-	// 合法 turn
+	// Valid turn.
 	if err := appendTurn(sl, 0); err != nil {
 		t.Fatalf("合法 turn 应通过: %v", err)
 	}
 }
 
-// TestSessionStepPairing 验证 step/start 必须处于开放 turn 中。
+// TestSessionStepPairing requires an open turn for step/start.
 func TestSessionStepPairing(t *testing.T) {
 	sl := session.NewSessionLog(brand.NewSessionID("s1"))
 
-	// 无开放 turn 的 step/start → 拒绝
+	// Reject step/start outside an open turn.
 	if _, err := sl.Append(session.StepStartData{Turn: 0, Step: 1}); err == nil {
 		t.Fatal("无开放 turn 的 step/start 应被拒绝")
 	}
 
-	// turn 内合法 step
+	// Valid step within a turn.
 	_, _ = sl.Append(session.TurnStartData{Turn: 0})
 	if _, err := sl.Append(session.StepStartData{Turn: 0, Step: 1}); err != nil {
 		t.Fatalf("turn 内 step/start 应通过: %v", err)
 	}
-	// step/end 未配对 step/start 后再开 step → 拒绝
+	// Reject starting another step before the previous step ends.
 	if _, err := sl.Append(session.StepStartData{Turn: 0, Step: 2}); err == nil {
 		t.Fatal("step 未关闭时再次 step/start 应被拒绝")
 	}
 }
 
-// TestSessionToolCallResultPairing 验证 tool/call ↔ tool/result 缺失配对被拒绝。
+// TestSessionToolCallResultPairing rejects unmatched tool calls and results.
 func TestSessionToolCallResultPairing(t *testing.T) {
 	sl := session.NewSessionLog(brand.NewSessionID("s1"))
 	_, _ = sl.Append(session.TurnStartData{Turn: 0})
 	_, _ = sl.Append(session.StepStartData{Turn: 0, Step: 1})
 
-	// 无匹配 tool/call 的 tool/result → 拒绝
+	// Reject tool/result without a matching tool/call.
 	if _, err := sl.Append(session.ToolResultData{CallID: brand.NewToolCallID("ghost")}); err == nil {
 		t.Fatal("无匹配 tool/call 的 tool/result 应被拒绝")
 	}
 
-	// 发起 tool/call
+	// Start a tool call.
 	callID := brand.NewToolCallID("call_x")
 	if _, err := sl.Append(session.ToolCallData{CallID: callID, Tool: "bash"}); err != nil {
 		t.Fatalf("tool/call 应通过: %v", err)
 	}
-	// 重复同一 callID → 拒绝
+	// Reject duplicate call IDs.
 	if _, err := sl.Append(session.ToolCallData{CallID: callID, Tool: "bash"}); err == nil {
 		t.Fatal("重复 tool/call 应被拒绝")
 	}
-	// 配对 result → 通过
+	// Accept the matching result.
 	if _, err := sl.Append(session.ToolResultData{CallID: callID, Output: "ok"}); err != nil {
 		t.Fatalf("tool/result 配对应通过: %v", err)
 	}
-	// 重复 result → 拒绝
+	// Reject a duplicate result.
 	if _, err := sl.Append(session.ToolResultData{CallID: callID}); err == nil {
 		t.Fatal("重复 tool/result 应被拒绝")
 	}
 }
 
-// TestSessionValidTurnWithTools 验证一条完整合法 turn（含工具调用）整体通过。
+// TestSessionValidTurnWithTools accepts a complete valid turn containing tool calls.
 func TestSessionValidTurnWithTools(t *testing.T) {
 	sl := session.NewSessionLog(brand.NewSessionID("s1"))
 
@@ -130,7 +129,7 @@ func TestSessionValidTurnWithTools(t *testing.T) {
 		t.Fatalf("完整合法 turn 应通过: %v", err)
 	}
 
-	// 未配对的 tool/call 在整个日志末尾不应存在
+	// No unmatched tool calls may remain at the end of the log.
 	events := sl.Events()
 	if len(events) != 7 {
 		t.Fatalf("事件数 = %d, want 7", len(events))

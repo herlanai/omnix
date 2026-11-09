@@ -1,4 +1,4 @@
-// 本文件对应任务 M45：Storage Domain KV 抽象（CAS 一致性 + 跨后端迁移）。
+// M45 storage-domain KV tests cover CAS consistency and cross-backend migration.
 package tests
 
 import (
@@ -9,7 +9,7 @@ import (
 	"github.com/herlanai/omnix/pkg/storage"
 )
 
-// makeBackends 构造 filekv 与 sqlitekv 两个真实后端 + memorykv，并返回清理函数（关闭 SQLite 连接）。
+// makeBackends constructs file, SQLite, and memory backends and returns SQLite cleanup.
 func makeBackends(t *testing.T) (fileKV, sqliteKV, memKV storage.Backend, cleanup func()) {
 	t.Helper()
 	dir := t.TempDir()
@@ -27,7 +27,7 @@ func makeBackends(t *testing.T) (fileKV, sqliteKV, memKV storage.Backend, cleanu
 	}
 }
 
-// TestStorageCASMismatchConsistent 验证两个后端 CAS 版本冲突错误行为一致。
+// TestStorageCASMismatchConsistent compares CAS conflict behavior across backends.
 func TestStorageCASMismatchConsistent(t *testing.T) {
 	fileKV, sqliteKV, memKV, cleanup := makeBackends(t)
 	defer cleanup()
@@ -39,7 +39,7 @@ func TestStorageCASMismatchConsistent(t *testing.T) {
 		"memorykv": memKV,
 	} {
 		t.Run(name, func(t *testing.T) {
-			// 新建
+			// Create a record.
 			v1, err := backend.Put(ctx, "k1", []byte("a"), 0)
 			if err != nil {
 				t.Fatalf("新建失败: %v", err)
@@ -48,7 +48,7 @@ func TestStorageCASMismatchConsistent(t *testing.T) {
 				t.Fatalf("首次版本应为 1: %d", v1)
 			}
 
-			// 用错误版本更新 → CAS 冲突
+			// Updating with the wrong version must conflict.
 			_, err = backend.Put(ctx, "k1", []byte("b"), 99)
 			if !storage.IsCASMismatch(err) {
 				t.Fatalf("应返回 ErrCASMismatch, 实际 %v", err)
@@ -61,7 +61,7 @@ func TestStorageCASMismatchConsistent(t *testing.T) {
 				t.Fatalf("CAS 字段异常: %+v", mismatch)
 			}
 
-			// 用正确版本更新
+			// Update with the correct version.
 			v2, err := backend.Put(ctx, "k1", []byte("b"), 1)
 			if err != nil {
 				t.Fatalf("正确版本更新失败: %v", err)
@@ -70,12 +70,12 @@ func TestStorageCASMismatchConsistent(t *testing.T) {
 				t.Fatalf("第二次版本应为 2: %d", v2)
 			}
 
-			// 用 expectedVersion=0 更新已存在 key → 冲突（新建语义）
+			// expectedVersion=0 requests creation and must conflict with an existing key.
 			if _, err := backend.Put(ctx, "k1", []byte("c"), 0); !storage.IsCASMismatch(err) {
 				t.Fatalf("对已存在 key 用 0 新建应冲突: %v", err)
 			}
 
-			// 读取
+			// Read the record.
 			data, version, err := backend.Get(ctx, "k1")
 			if err != nil {
 				t.Fatalf("Get 失败: %v", err)
@@ -87,7 +87,7 @@ func TestStorageCASMismatchConsistent(t *testing.T) {
 	}
 }
 
-// asCASMismatch 便捷类型断言。
+// asCASMismatch performs a convenient type assertion.
 func asCASMismatch(err error, target **storage.ErrCASMismatch) bool {
 	e, ok := err.(*storage.ErrCASMismatch)
 	if ok {
@@ -96,7 +96,7 @@ func asCASMismatch(err error, target **storage.ErrCASMismatch) bool {
 	return ok
 }
 
-// TestStorageTypedDomain 验证 Domain[T] 类型化读写 + CAS。
+// TestStorageTypedDomain verifies typed Domain[T] reads, writes, and CAS.
 func TestStorageTypedDomain(t *testing.T) {
 	_, sqliteKV, _, cleanup := makeBackends(t)
 	defer cleanup()
@@ -109,11 +109,11 @@ func TestStorageTypedDomain(t *testing.T) {
 
 	domain := storage.NewDomain[feedback](sqliteKV, "feedback")
 
-	// 新建
+	// Create a record.
 	if _, err := domain.Put(ctx, "msg_1", feedback{Rating: 5, Note: "good"}, 0); err != nil {
 		t.Fatalf("新建失败: %v", err)
 	}
-	// 读取
+	// Read the record.
 	fb, version, err := domain.Get(ctx, "msg_1")
 	if err != nil {
 		t.Fatalf("Get 失败: %v", err)
@@ -122,16 +122,16 @@ func TestStorageTypedDomain(t *testing.T) {
 		t.Fatalf("读取类型化值异常: %+v", fb)
 	}
 
-	// CAS 更新
+	// Update through CAS.
 	if _, err := domain.Put(ctx, "msg_1", feedback{Rating: 4}, version); err != nil {
 		t.Fatalf("CAS 更新失败: %v", err)
 	}
-	// CAS 冲突
+	// CAS conflict.
 	if _, err := domain.Put(ctx, "msg_1", feedback{Rating: 1}, version); !storage.IsCASMismatch(err) {
 		t.Fatalf("过期版本更新应冲突: %v", err)
 	}
 
-	// List 域前缀隔离
+	// List isolates the domain prefix.
 	if _, err := domain.Put(ctx, "msg_2", feedback{Rating: 3}, 0); err != nil {
 		t.Fatalf("msg_2 新建失败: %v", err)
 	}
@@ -144,13 +144,13 @@ func TestStorageTypedDomain(t *testing.T) {
 	}
 }
 
-// TestStorageMigration 验证 filekv → sqlitekv 跨后端迁移脚本可跑且幂等。
+// TestStorageMigration verifies idempotent file-to-SQLite migration.
 func TestStorageMigration(t *testing.T) {
 	fileKV, sqliteKV, _, cleanup := makeBackends(t)
 	defer cleanup()
 	ctx := context.Background()
 
-	// 源端写入 3 个 key（含子前缀 key）
+	// Write three source keys, including one with a nested prefix.
 	_, _ = fileKV.Put(ctx, "a", []byte("1"), 0)
 	_, _ = fileKV.Put(ctx, "b/x", []byte("2"), 0)
 	_, _ = fileKV.Put(ctx, "c", []byte("3"), 0)
@@ -166,7 +166,7 @@ func TestStorageMigration(t *testing.T) {
 		t.Fatalf("首次迁移不应跳过: %v", skipped)
 	}
 
-	// 校验目标端数据一致
+	// Verify identical data in the destination.
 	for _, key := range []string{"a", "b/x", "c"} {
 		data, _, err := sqliteKV.Get(ctx, key)
 		if err != nil {
@@ -177,7 +177,7 @@ func TestStorageMigration(t *testing.T) {
 		}
 	}
 
-	// 幂等：再次迁移应全部跳过（目标版本不低）
+	// Repeating migration skips entries whose destination versions are already current.
 	migrated2, skipped2, err := storage.Migrate(ctx, fileKV, sqliteKV)
 	if err != nil {
 		t.Fatalf("二次迁移失败: %v", err)
@@ -187,7 +187,7 @@ func TestStorageMigration(t *testing.T) {
 	}
 }
 
-// TestStorageKeyNotFound 验证不存在的 key 返回 ErrKeyNotFound。
+// TestStorageKeyNotFound returns ErrKeyNotFound for absent keys.
 func TestStorageKeyNotFound(t *testing.T) {
 	_, _, memKV, cleanup := makeBackends(t)
 	defer cleanup()

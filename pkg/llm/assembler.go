@@ -1,26 +1,25 @@
-// 本文件复刻官方 packages/llm/llm/src/assembler.ts 的核心算法，适配本项目简化版
-// StreamChunk 协议（text/reasoning/tool-call/done）。
-//
-// Agent 循环一遍接收流式分片、一遍把原始分片写入日志，BlockAssembler 是唯一权威的
-// "分片 → 助手消息"组装算法：连续 text/reasoning 增量合并，tool-call 在到达时固化为
-// 工具使用块，最终输出严格保持流顺序。
+// This file adapts upstream packages/llm/llm/src/assembler.ts to the simplified
+// text/reasoning/tool-call/done protocol. While the agent logs raw chunks,
+// BlockAssembler is the authoritative chunk-to-message conversion: adjacent
+// text or reasoning deltas merge, tool calls become blocks on arrival, and
+// output preserves stream order.
 package llm
 
-// BlockAssembler 增量地把 StreamChunk 组装为 ContentBlock。
-// 零值不可用，请用 NewBlockAssembler。
+// BlockAssembler incrementally converts StreamChunk values to ContentBlock values.
+// Use NewBlockAssembler rather than the zero value.
 type BlockAssembler struct {
-	curKind  StreamChunkKind // 当前正在累积的增量类型（"" 表示无打开缓冲）
+	curKind  StreamChunkKind // The current delta kind; empty means no open buffer.
 	curBuf   string
 	blocks   []ContentBlock
 	finished bool
 }
 
-// NewBlockAssembler 创建空组装器。
+// NewBlockAssembler creates an empty assembler.
 func NewBlockAssembler() *BlockAssembler {
 	return &BlockAssembler{}
 }
 
-// flush 把当前打开的 text/reasoning 缓冲固化为一个块。
+// flush commits the open text or reasoning buffer as a block.
 func (a *BlockAssembler) flush() {
 	if a.curKind == "" {
 		return
@@ -38,7 +37,7 @@ func (a *BlockAssembler) flush() {
 	a.curBuf = ""
 }
 
-// Push 按流顺序喂入一个分片。
+// Push consumes a chunk in stream order.
 func (a *BlockAssembler) Push(c StreamChunk) {
 	switch c.Kind {
 	case ChunkText:
@@ -64,7 +63,7 @@ func (a *BlockAssembler) Push(c StreamChunk) {
 	}
 }
 
-// Blocks 返回截至目前组装好的块（拷贝，保持流顺序）；未结束的打开缓冲也会被组装。
+// Blocks returns a copy of assembled blocks in stream order, including any open buffer.
 func (a *BlockAssembler) Blocks() []ContentBlock {
 	a.flush()
 	out := make([]ContentBlock, len(a.blocks))
@@ -72,10 +71,10 @@ func (a *BlockAssembler) Blocks() []ContentBlock {
 	return out
 }
 
-// Message 用组装好的块构造一条助手消息。
+// Message constructs an assistant message from assembled blocks.
 func (a *BlockAssembler) Message() Message {
 	return Message{Role: RoleAssistant, Content: a.Blocks()}
 }
 
-// Finished 是否已收到 done。
+// Finished reports whether a done chunk has arrived.
 func (a *BlockAssembler) Finished() bool { return a.finished }

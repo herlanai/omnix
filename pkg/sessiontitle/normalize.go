@@ -1,5 +1,6 @@
-// normalize.go 复刻官方 session-title/normalize：把不可信标题文本清洗为单行
-// （剥离转义/控制字符/方向控制、空白归一），并按 UTF-8 字节预算截断而不拆字符。
+// Title normalization matches session-title/normalize: remove escapes, control
+// and directional characters, normalize whitespace, and truncate to a UTF-8 byte
+// budget without splitting characters.
 package sessiontitle
 
 import (
@@ -8,7 +9,7 @@ import (
 	"unicode/utf8"
 )
 
-// CleanTitle 移除转义与控制类字符，并把连续空白压成单个空格，返回单行文本。
+// CleanTitle removes escape/control characters and collapses whitespace to one line.
 func CleanTitle(input string) string {
 	var b strings.Builder
 	b.Grow(len(input))
@@ -17,14 +18,14 @@ func CleanTitle(input string) string {
 	runes := []rune(input)
 	for i := 0; i < len(runes); {
 		r := runes[i]
-		// 先整体跳过 ANSI 转义序列（ESC 起头）。
+		// Skip complete ANSI escape sequences beginning with ESC.
 		if r == 0x1b {
 			i = skipAnsi(runes, i)
 			continue
 		}
 		switch {
 		case isTitleControl(r):
-			i++ // 丢弃控制类字符。
+			i++ // Discard control characters.
 			continue
 		case unicode.IsSpace(r):
 			if leading || prevSpace {
@@ -44,19 +45,19 @@ func CleanTitle(input string) string {
 	return strings.TrimRight(b.String(), " ")
 }
 
-// skipAnsi 返回从 idx（ESC）起整个转义序列之后的下标。
+// skipAnsi returns the index after the escape sequence starting at idx (ESC).
 func skipAnsi(runes []rune, idx int) int {
 	if idx+1 >= len(runes) {
 		return len(runes)
 	}
 	switch runes[idx+1] {
-	case '[': // CSI：读到 0x40–0x7e 终止字节。
+	case '[': // CSI ends at a byte in 0x40-0x7e.
 		j := idx + 2
 		for j < len(runes) && !(runes[j] >= 0x40 && runes[j] <= 0x7e) {
 			j++
 		}
 		return j + 1
-	case ']': // OSC：以 BEL 或 ST 结束。
+	case ']': // OSC ends at BEL or ST.
 		j := idx + 2
 		for j < len(runes) {
 			if runes[j] == 0x07 {
@@ -68,35 +69,35 @@ func skipAnsi(runes []rune, idx int) int {
 			j++
 		}
 		return j
-	default: // 两字节转义族。
+	default: // Two-byte escape sequences.
 		return idx + 2
 	}
 }
 
-// isTitleControl 判断是否为标题中应剔除的控制/方向/不可见字符。
+// isTitleControl identifies control, directional, and invisible characters to remove.
 func isTitleControl(r rune) bool {
 	if r == '\t' || r == '\n' || r == '\r' {
-		return false // 交由空白归一处理
+		return false // Handled by whitespace normalization.
 	}
 	if r <= 0x1f || r == 0x7f || (r >= 0x80 && r <= 0x9f) {
-		return true // C0/C1 控制
+		return true // C0 and C1 controls.
 	}
 	switch {
-	case r == 0x200b, r == 0x200e, r == 0x200f: // 零宽/方向
+	case r == 0x200b, r == 0x200e, r == 0x200f: // Zero-width and directional characters.
 		return true
-	case r >= 0x202a && r <= 0x202e: // 方向格式
+	case r >= 0x202a && r <= 0x202e: // Directional formatting.
 		return true
-	case r >= 0x2060 && r <= 0x2064: // 不可见连接/格式
+	case r >= 0x2060 && r <= 0x2064: // Invisible joining and formatting characters.
 		return true
-	case r >= 0x2066 && r <= 0x206f: // 方向隔离
+	case r >= 0x2066 && r <= 0x206f: // Directional isolates.
 		return true
-	case r == 0xfeff: // BOM/零宽不换行空格
+	case r == 0xfeff: // BOM and zero-width nonbreaking space.
 		return true
 	}
 	return false
 }
 
-// TruncateUTF8 按 UTF-8 字节预算返回最长的完整 rune 前缀，不拆分字符。
+// TruncateUTF8 returns the longest complete-rune prefix within a UTF-8 byte budget.
 func TruncateUTF8(input string, maxBytes int) string {
 	if maxBytes <= 0 || len(input) <= maxBytes {
 		if maxBytes <= 0 {
@@ -115,7 +116,7 @@ func TruncateUTF8(input string, maxBytes int) string {
 	return input[:used]
 }
 
-// Normalize 清洗标题并按字节预算截断。
+// Normalize cleans a title and truncates it to a byte budget.
 func Normalize(input string, maxBytes int) string {
 	return strings.TrimRight(TruncateUTF8(CleanTitle(input), maxBytes), " ")
 }

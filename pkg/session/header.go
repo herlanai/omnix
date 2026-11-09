@@ -1,10 +1,6 @@
-// 本文件对应任务 M06：SessionHeader 元数据。
-//
-// 对齐上游：packages/core/session（SessionHeader）
-//
-// SessionHeader 描述会话的静态元数据：格式版本 / ID / 创建时间 / CWD / 父会话
-// （fork lineage）/ 种子长度（seed length）/ 来源 / 代理预设等。它是持久化键目录、
-// fork 谱系追踪与 subagent 递归深度的唯一依据。
+// SessionHeader metadata follows upstream session (M06). Static fields include
+// format version, ID, creation time, cwd, fork parent, seed length, origin,
+// and agent preset. They define persistence identity, lineage, and subagent depth.
 package session
 
 import (
@@ -15,62 +11,62 @@ import (
 	"github.com/herlanai/omnix/pkg/brand"
 )
 
-// SessionFormatVersion 是当前会话文件格式版本号。
-// 任何对事件/头部结构不兼容的改动都必须递增该版本，并拒绝读取旧/新版本。
+// SessionFormatVersion identifies the current on-disk format. Incompatible
+// header/event changes must increment it and reject other versions.
 const SessionFormatVersion = 1
 
-// HeaderOrigin 标识会话来源。
+// HeaderOrigin identifies how a session originated.
 type HeaderOrigin string
 
-// 会话来源枚举。
+// Session origins.
 const (
-	OriginCreated HeaderOrigin = "created" // 全新创建
-	OriginFork    HeaderOrigin = "fork"    // 由父会话分叉
-	OriginResume  HeaderOrigin = "resume"  // 冷恢复
+	OriginCreated HeaderOrigin = "created" // Newly created session.
+	OriginFork    HeaderOrigin = "fork"    // Forked from a parent session.
+	OriginResume  HeaderOrigin = "resume"  // Resumed from persisted state.
 )
 
-// SessionHeader 是会话的静态元数据头部。
+// SessionHeader contains static session metadata.
 type SessionHeader struct {
-	// Version 为格式版本号，序列化时写入、反序列化时校验（fail-closed）。
+	// Version is written on serialization and checked fail-closed on loading.
 	Version int `json:"version"`
-	// ID 为会话唯一标识。
+	// ID uniquely identifies the session.
 	ID brand.SessionID `json:"id"`
-	// CreatedAt 为会话创建时间。
+	// CreatedAt records session creation time.
 	CreatedAt time.Time `json:"createdAt"`
-	// Cwd 为会话工作目录（影响 FS 工具与相对路径解析）。
+	// Cwd is the working directory used by filesystem tools and relative paths.
 	Cwd string `json:"cwd,omitempty"`
-	// ParentSession 为父会话 ID（fork 谱系；非空表示由某会话分叉而来）。
+	// ParentSession records the fork source; empty means no parent.
 	ParentSession brand.SessionID `json:"parentSession,omitempty"`
-	// SeedLength 为种子长度：Resume/Fork 时已回放（cold stored）的事件数，
-	// 用于定位 session/end-seed 之后的 live work 分界。
+	// SeedLength counts stored events replayed during Resume/Fork and locates
+	// the boundary between seed history and live work.
 	SeedLength uint64 `json:"seedLength,omitempty"`
-	// Origin 为会话来源（created / fork / resume）。
+	// Origin is created, fork, or resume.
 	Origin HeaderOrigin `json:"origin,omitempty"`
-	// DelegationDepth 为 subagent 递归委派深度（根为 0，每层 +1）。
+	// DelegationDepth counts recursive subagent levels, starting at zero.
 	DelegationDepth int `json:"delegationDepth,omitempty"`
-	// AgentPreset 为会话绑定的代理预设名。
+	// AgentPreset names the bound agent preset.
 	AgentPreset string `json:"agentPreset,omitempty"`
 }
 
-// NewSessionHeader 创建全新会话头部（版本当前值 / 来源 created / 深度 0）。
+// NewSessionHeader creates a current-version header with created origin and zero depth.
 func NewSessionHeader(id brand.SessionID, cwd string) *SessionHeader {
 	return &SessionHeader{
-		Version:     SessionFormatVersion,
-		ID:          id,
-		CreatedAt:   time.Now().UTC(),
-		Cwd:         cwd,
-		Origin:      OriginCreated,
+		Version:         SessionFormatVersion,
+		ID:              id,
+		CreatedAt:       time.Now().UTC(),
+		Cwd:             cwd,
+		Origin:          OriginCreated,
 		DelegationDepth: 0,
 	}
 }
 
-// Marshal 序列化头部为 JSON 字节。
+// Marshal serializes the header as JSON.
 func (h *SessionHeader) Marshal() ([]byte, error) {
 	return json.Marshal(h)
 }
 
-// UnmarshalSessionHeader 反序列化头部并做 fail-closed 版本校验：
-//   - 未知/不支持的版本号 → 返回错误，拒绝读（避免用错误的解析逻辑损坏数据）。
+// UnmarshalSessionHeader decodes the header and rejects unsupported versions
+// to avoid interpreting data with incompatible format rules.
 func UnmarshalSessionHeader(data []byte) (*SessionHeader, error) {
 	var h SessionHeader
 	if err := json.Unmarshal(data, &h); err != nil {
@@ -84,7 +80,7 @@ func UnmarshalSessionHeader(data []byte) (*SessionHeader, error) {
 	return &h, nil
 }
 
-// Validate 校验头部字段完整性（读取后调用）。
+// Validate checks header completeness after loading.
 func (h *SessionHeader) Validate() error {
 	if h.Version != SessionFormatVersion {
 		return &SessionFormatUnsupportedError{Version: h.Version}
@@ -98,10 +94,8 @@ func (h *SessionHeader) Validate() error {
 	return nil
 }
 
-// Fork 基于当前头部派生一个子会话头部（fork lineage）：
-//   - ParentSession = 当前会话 ID；
-//   - Origin = fork；DelegationDepth = 父深度 + 1；
-//   - SeedLength 由调用方在回放完种子事件后写入。
+// Fork derives a child header with this ID as ParentSession, fork origin,
+// and depth increased by one. The caller sets SeedLength after replaying seeds.
 func (h *SessionHeader) Fork(childID brand.SessionID) *SessionHeader {
 	return &SessionHeader{
 		Version:         SessionFormatVersion,
@@ -109,24 +103,24 @@ func (h *SessionHeader) Fork(childID brand.SessionID) *SessionHeader {
 		CreatedAt:       time.Now().UTC(),
 		Cwd:             h.Cwd,
 		ParentSession:   h.ID,
-		SeedLength:      0, // 分叉子会话从零开始 live
+		SeedLength:      0, // A forked child starts with no live work.
 		Origin:          OriginFork,
 		DelegationDepth: h.DelegationDepth + 1,
 		AgentPreset:     h.AgentPreset,
 	}
 }
 
-// SessionFormatUnsupportedError 表示会话格式版本不支持（fail-closed）。
+// SessionFormatUnsupportedError indicates a rejected session format version.
 type SessionFormatUnsupportedError struct {
 	Version int
 }
 
-// Error 实现 error 接口。
+// Error implements the error interface.
 func (e *SessionFormatUnsupportedError) Error() string {
 	return fmt.Sprintf("session header: unsupported format version %d (want %d)", e.Version, SessionFormatVersion)
 }
 
-// AsHeaderOrigin 便捷类型转换（供测试与外部构造）。
+// AsHeaderOrigin converts an origin string for tests and external construction.
 func AsHeaderOrigin(s string) HeaderOrigin {
 	return HeaderOrigin(s)
 }

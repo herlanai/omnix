@@ -1,6 +1,6 @@
-// anonymous.go 复刻官方 identity/anonymous-user-id：每个 Harness home 一个随机
-// UUID，持久化为 .anonymous-user-id 单行；文件缺失或损坏则新建，写入失败仍返回
-// 可用 ID（best-effort），进程内按路径 memo。
+// Anonymous identity matches identity/anonymous-user-id: persist one random UUID
+// per Harness home in .anonymous-user-id. Missing or corrupt files are recreated;
+// persistence failures still return a usable ID. Results are memoized by path.
 package telemetry
 
 import (
@@ -13,12 +13,12 @@ import (
 	"github.com/herlanai/omnix/pkg/uuid"
 )
 
-// AnonymousIDFileName 是存放匿名 ID 的文件名。
+// AnonymousIDFileName stores the anonymous ID.
 const AnonymousIDFileName = ".anonymous-user-id"
 
 var (
-	anonMu     sync.Mutex
-	anonMemo   = map[string]string{}
+	anonMu      sync.Mutex
+	anonMemo    = map[string]string{}
 	uuidPattern = func(s string) bool {
 		parts := strings.Split(s, "-")
 		if len(parts) != 5 {
@@ -39,7 +39,7 @@ var (
 	}
 )
 
-// GetOrCreateAnonymousID 返回 Harness home 下的匿名 ID，必要时创建并持久化。
+// GetOrCreateAnonymousID reads or creates and persists a Harness home's anonymous ID.
 func GetOrCreateAnonymousID(env map[string]string) (string, error) {
 	home, err := homepath.Resolve("", env)
 	if err != nil {
@@ -64,7 +64,7 @@ func GetOrCreateAnonymousID(env map[string]string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	// best-effort 持久化：目录与写入失败都不阻断本次使用。
+	// Persistence is best effort; directory or write failures do not prevent use.
 	if err := os.MkdirAll(home, 0o700); err == nil {
 		_ = os.WriteFile(file, []byte(id+"\n"), 0o600)
 	}

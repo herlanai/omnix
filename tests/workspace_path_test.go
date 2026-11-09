@@ -1,4 +1,4 @@
-// Package tests 的 workspace 路径辅助验收测试。
+// Workspace path-helper tests.
 package tests
 
 import (

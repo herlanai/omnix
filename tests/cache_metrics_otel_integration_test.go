@@ -1,10 +1,5 @@
-// Package tests 的 N09（Grafana 看板 + OTel 探针）验收测试。
-//
-// 覆盖：
-//   - 4 个指标名（hit_ratio / hit_tokens / miss_tokens / broken_count）正确导出
-//   - histogram P50 计算正确（供告警规则）
-//   - broken_count 在破窗模式时 +1
-//   - Grafana 看板 JSON 结构合法且含 3 面板
+// N09 metrics tests cover the four exported metric names, histogram P50, incrementing
+// broken_count, and valid Grafana JSON with three panels.
 package tests
 
 import (
@@ -15,7 +10,7 @@ import (
 	"github.com/herlanai/omnix/internal/telemetry"
 )
 
-// TestN09MetricsNames 验证 4 个 OTel 指标名。
+// TestN09MetricsNames verifies all four OTel metric names.
 func TestN09MetricsNames(t *testing.T) {
 	names := telemetry.MetricsNames()
 	want := map[string]bool{
@@ -36,7 +31,7 @@ func TestN09MetricsNames(t *testing.T) {
 	}
 }
 
-// TestN09MetricsRecord 验证记录与 broken_count。
+// TestN09MetricsRecord verifies recording and broken_count.
 func TestN09MetricsRecord(t *testing.T) {
 	m := telemetry.NewCacheMetrics()
 	m.Record(90, 10, 0.9)
@@ -50,10 +45,10 @@ func TestN09MetricsRecord(t *testing.T) {
 	}
 }
 
-// TestN09HistogramP50 验证 P50 计算。
+// TestN09HistogramP50 verifies P50 calculation.
 func TestN09HistogramP50(t *testing.T) {
 	m := telemetry.NewCacheMetrics()
-	// 4 个样本 0.5,0.6,0.9,1.0 → 中位数 0.9。
+	// For samples 0.5, 0.6, 0.9, and 1.0, select the upper median 0.9.
 	m.Record(1, 0, 0.5)
 	m.Record(1, 0, 0.6)
 	m.Record(1, 0, 0.9)
@@ -63,7 +58,7 @@ func TestN09HistogramP50(t *testing.T) {
 	}
 }
 
-// TestN09GrafanaDashboardJSON 验证 Grafana 看板 JSON 合法且 3 面板 + 2 指标。
+// TestN09GrafanaDashboardJSON validates dashboard JSON, three panels, and two metric references.
 func TestN09GrafanaDashboardJSON(t *testing.T) {
 	data, err := os.ReadFile("../deploy/grafana/omnix-cache-dashboard.json")
 	if err != nil {

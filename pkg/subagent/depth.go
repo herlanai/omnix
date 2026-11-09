@@ -1,14 +1,14 @@
-// 本文件复刻官方 subagent/src/depth.ts：委托深度核算。顶层代理深度为 0，每派生
-// 一层子代理深度 +1；持久化头与运行期选项取 max（运行期只能加深、不能降低，否则
-// 一个恢复出来的子代理会被当成顶层而获得过多委托预算）。
+// Delegation depth matches subagent/src/depth.ts: roots start at zero and each
+// child adds one. Use the maximum persisted and runtime depth so resumed children
+// cannot lower their depth and gain extra delegation budget.
 package subagent
 
 import "errors"
 
-// ErrInvalidDepth 表示深度/上限不是非负整数。
+// ErrInvalidDepth indicates a depth or limit that is not a nonnegative integer.
 var ErrInvalidDepth = errors.New("subagent: depth must be a non-negative integer")
 
-// ChildDepth 返回父深度派生一个子代理时的深度（+1）。
+// ChildDepth returns the parent depth plus one.
 func ChildDepth(parentDepth int) (int, error) {
 	if parentDepth < 0 {
 		return 0, ErrInvalidDepth
@@ -16,7 +16,7 @@ func ChildDepth(parentDepth int) (int, error) {
 	return parentDepth + 1, nil
 }
 
-// ResolveDepth 合并持久化头深度与运行期深度，取较大者（运行期只可加深）。
+// ResolveDepth uses the larger persisted or runtime depth; runtime can only deepen it.
 func ResolveDepth(headerDepth, runtimeDepth int) (int, error) {
 	if headerDepth < 0 || runtimeDepth < 0 {
 		return 0, ErrInvalidDepth
@@ -27,8 +27,7 @@ func ResolveDepth(headerDepth, runtimeDepth int) (int, error) {
 	return headerDepth, nil
 }
 
-// CanDelegate 判断当前深度是否还能再派生子代理。
-// maxDepth < 0 表示不限制；否则 depth 必须小于 maxDepth。
+// CanDelegate requires depth below maxDepth; negative maxDepth means unlimited.
 func CanDelegate(depth, maxDepth int) bool {
 	if depth < 0 {
 		return false

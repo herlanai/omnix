@@ -1,4 +1,4 @@
-// Package tests 的压缩工具配平验收测试。
+// Compaction tool-call/result balance tests.
 package tests
 
 import (
@@ -32,7 +32,7 @@ func TestBalancedCutsCallThenResult(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// cut0 配平；cut1（调用后、结果前）不配平；cut2 重新配平。
+	// Cut 0 is balanced; cut 1 between call and result is not; cut 2 is balanced again.
 	if !cuts[0] || cuts[1] || !cuts[2] {
 		t.Fatalf("expected balanced pattern [T F T], got %v", cuts)
 	}

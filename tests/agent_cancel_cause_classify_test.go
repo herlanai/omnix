@@ -1,4 +1,4 @@
-// 本文件对应任务 M18：Agent Cancel 原因分类。
+// M18: classification of Agent cancellation causes.
 package tests
 
 import (
@@ -9,7 +9,7 @@ import (
 	"github.com/herlanai/omnix/pkg/session"
 )
 
-// TestAgentCancelCauseClassify 验证 5 种取消路径原因可正确区分。
+// TestAgentCancelCauseClassify distinguishes the five cancellation paths.
 func TestAgentCancelCauseClassify(t *testing.T) {
 	causes := agent.AllCancelCauses()
 	if len(causes) != 5 {
@@ -18,13 +18,13 @@ func TestAgentCancelCauseClassify(t *testing.T) {
 
 	for _, cause := range causes {
 		sl := session.NewSessionLog(brand.NewSessionID("cancel_" + string(cause)))
-		// 打开 turn（turn-stopping 事件要求处于开放 turn 中）
+		// Open a turn because turn-stopping requires an active turn.
 		_, _ = sl.Append(session.TurnStartData{Turn: 0})
-		// 记录取消
+		// Record the cancellation.
 		if err := agent.RecordCancel(sl, cause); err != nil {
 			t.Fatalf("RecordCancel(%s) 失败: %v", cause, err)
 		}
-		// 提取
+		// Extract the cancellation cause.
 		got, ok := agent.ExtractCancelCause(sl.Events())
 		if !ok {
 			t.Fatalf("原因 %s 应被提取到", cause)
@@ -35,7 +35,7 @@ func TestAgentCancelCauseClassify(t *testing.T) {
 	}
 }
 
-// TestAgentCancelViaAgentAPI 验证通过 Agent.Cancel 写入后可提取。
+// TestAgentCancelViaAgentAPI extracts cancellation recorded through Agent.Cancel.
 func TestAgentCancelViaAgentAPI(t *testing.T) {
 	sl := session.NewSessionLog(brand.NewSessionID("cancel_api"))
 	a := agent.NewAgent(brand.NewSessionID("cancel_api"), sl, nil, nil, nil)
@@ -48,7 +48,7 @@ func TestAgentCancelViaAgentAPI(t *testing.T) {
 	}
 }
 
-// TestAgentCancelAbsent 验证无取消记录时返回 false。
+// TestAgentCancelAbsent returns false when no cancellation was recorded.
 func TestAgentCancelAbsent(t *testing.T) {
 	sl := session.NewSessionLog(brand.NewSessionID("no_cancel"))
 	_, _ = sl.Append(session.UserMessageData{Content: "hi"})

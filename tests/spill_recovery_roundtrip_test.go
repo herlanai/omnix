@@ -1,9 +1,5 @@
-// Package tests 的 Spill Storage（M42）验收测试。
-//
-// 覆盖：
-//   - 工具结果 / Bash 结果文本分别 > 阈值均正确 spill
-//   - 读引用（locator）还原内容字节一致
-//   - 未超阈值保留内联；保存失败 best-effort 保留原文本
+// M42 spill tests cover oversized tool and Bash results, byte-exact locator reads, inline
+// retention below the threshold, and best-effort preservation after save failure.
 package tests
 
 import (
@@ -14,7 +10,7 @@ import (
 	"github.com/herlanai/omnix/pkg/spill"
 )
 
-// newSpillReq 构造一个保存请求（工具来源）。
+// newSpillReq constructs a tool-origin save request.
 func newSpillReq(sessionID, tool, suggested string) spill.SaveTextSpill {
 	return spill.SaveTextSpill{
 		Owner:         spill.SpillOwner{SessionID: brand.NewSessionID(sessionID)},
@@ -23,10 +19,10 @@ func newSpillReq(sessionID, tool, suggested string) spill.SaveTextSpill {
 	}
 }
 
-// TestSpillToolResultOverThreshold 验证工具结果超过阈值 → spill + 读引用还原一致。
+// TestSpillToolResultOverThreshold spills oversized results and resolves them exactly.
 func TestSpillToolResultOverThreshold(t *testing.T) {
 	store := spill.NewFileStore(t.TempDir())
-	bigText := strings.Repeat("line of tool output\n", 500) // ~9KB > 1KB 阈值
+	bigText := strings.Repeat("line of tool output\n", 500) // Approximately 9 KB exceeds the 1 KB threshold.
 
 	inline, ref, err := spill.Apply(store, newSpillReq("s1", "web_fetch", "web_fetch.txt"), bigText, 1024, 256)
 	if err != nil {
@@ -38,7 +34,7 @@ func TestSpillToolResultOverThreshold(t *testing.T) {
 	if len(inline) >= len(bigText) {
 		t.Fatal("内联应为预览，而非完整文本")
 	}
-	// 读引用还原完整内容字节一致。
+	// The locator must resolve to the complete original bytes.
 	got, err := store.ReadText(ref.Locator)
 	if err != nil {
 		t.Fatalf("读 locator 失败: %v", err)
@@ -48,7 +44,7 @@ func TestSpillToolResultOverThreshold(t *testing.T) {
 	}
 }
 
-// TestSpillBashResultOverThreshold 验证 Bash 结果超过阈值同样 spill（第二个消费者）。
+// TestSpillBashResultOverThreshold spills oversized Bash output as a second consumer.
 func TestSpillBashResultOverThreshold(t *testing.T) {
 	store := spill.NewFileStore(t.TempDir())
 	seqOutput := strings.Repeat("1\n2\n3\n4\n5\n", 1000) // ~10KB
@@ -69,7 +65,7 @@ func TestSpillBashResultOverThreshold(t *testing.T) {
 	}
 }
 
-// TestSpillUnderThresholdInline 验证未超阈值保留内联、无 ref。
+// TestSpillUnderThresholdInline keeps small output inline without a reference.
 func TestSpillUnderThresholdInline(t *testing.T) {
 	store := spill.NewFileStore(t.TempDir())
 	small := "short"
@@ -85,14 +81,15 @@ func TestSpillUnderThresholdInline(t *testing.T) {
 	}
 }
 
-// TestSpillBestEffortOnSaveFailure 验证保存失败时 best-effort 保留原文本。
+// TestSpillBestEffortOnSaveFailure preserves the original text after a save failure.
 func TestSpillBestEffortOnSaveFailure(t *testing.T) {
-	// 设一个无法创建的 root（路径是一存在的文件）→ save 失败。
+	// Use an existing file as the root so directory creation and saving fail.
 	store := spill.NewFileStore("")
 	big := strings.Repeat("x", 4096)
 	_, _, err := spill.Apply(store, newSpillReq("s4", "bash", "b.txt"), big, 64, 0)
 	if err == nil {
 		t.Fatal("root 未配置应保存失败并返回错误")
 	}
-	// 注意：Apply best-effort 仍返回原文本，但错误上抛供调用方判定（不把成功调用搞成 isError）。
+	// Apply retains the original text but returns the storage error for caller handling; it does not
+	// mark an otherwise successful tool call as isError.
 }

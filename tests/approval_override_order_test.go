@@ -1,10 +1,5 @@
-// Package tests 的审批策略（M27）验收测试。
-//
-// 覆盖：
-//   - 三层 override 顺序（preset < user < session）
-//   - 决策路径：allow-all / deny-all / ask-dangerous
-//   - ask→allowed-once 语义：通过一次仅放行当次，下一次同工具继续 ask
-//   - ask 调用 User Questions 成功/失败链路完整
+// M27 approval tests cover preset/user/session precedence, allow/deny/ask decisions, one-call-only
+// approval with repeated prompts, and successful or failed User Questions requests.
 package tests
 
 import (
@@ -15,21 +10,21 @@ import (
 	"github.com/herlanai/omnix/pkg/userq"
 )
 
-// fixedAnswerProvider 是可控答案的 userq provider（0 表示准许，1 表示拒绝）。
+// fixedAnswerProvider returns a controlled answer: 0 allows and 1 denies.
 type fixedAnswerProvider struct{ ans int }
 
 func (f *fixedAnswerProvider) Ask(_ context.Context, _ userq.QuestionOptions) (*userq.QuestionResult, error) {
 	return &userq.QuestionResult{SelectedIndex: f.ans, SelectedIndices: []int{f.ans}}, nil
 }
 
-// failingAnswerProvider 是总是报错的 userq provider（模拟 UQ 失败）。
+// failingAnswerProvider always fails to simulate a User Questions error.
 type failingAnswerProvider struct{}
 
 func (*failingAnswerProvider) Ask(context.Context, userq.QuestionOptions) (*userq.QuestionResult, error) {
 	return nil, context.Canceled
 }
 
-// presetPolicy 是测试用 preset → 策略映射。
+// presetPolicy maps test presets to policies.
 func presetPolicy(preset string) (approval.Policy, bool) {
 	switch preset {
 	case "safe":
@@ -42,34 +37,34 @@ func presetPolicy(preset string) (approval.Policy, bool) {
 	return approval.PolicyDenyAll, false
 }
 
-// TestApprovalThreeLayerOverrideOrder 验证 预设<用户<会话 三层覆盖顺序。
+// TestApprovalThreeLayerOverrideOrder verifies preset < user < session precedence.
 func TestApprovalThreeLayerOverrideOrder(t *testing.T) {
 	svc := approval.New(presetPolicy, userq.New(userq.NewStub()))
 
-	// 预设层（danger → allow-all）。
+	// The danger preset selects allow-all.
 	if e := svc.Resolve("danger", ""); e.Source != approval.SourcePreset || e.Policy != approval.PolicyAllowAll {
 		t.Fatalf("预设层错误: %+v", e)
 	}
 
-	// 用户层 override（deny-all）优先于预设层。
+	// The user's deny-all override takes precedence over the preset.
 	svc.SetUserPolicy(approval.PolicyDenyAll)
 	if e := svc.Resolve("danger", ""); e.Source != approval.SourceUser || e.Policy != approval.PolicyDenyAll {
 		t.Fatalf("用户层 override 错误: %+v", e)
 	}
 
-	// 会话层 override（allow-all）最高。
+	// The session's allow-all override has highest priority.
 	svc.SetSessionPolicy("sess1", approval.PolicyAllowAll)
 	if e := svc.Resolve("danger", "sess1"); e.Source != approval.SourceSession || e.Policy != approval.PolicyAllowAll {
 		t.Fatalf("会话层 override 错误: %+v", e)
 	}
 
-	// 其他会话不回落到被覆盖会话的策略（各自独立）。
+	// Other sessions remain independent of this session's override.
 	if e := svc.Resolve("danger", "sess-other"); e.Source != approval.SourceUser {
 		t.Fatalf("其他会话应命中用户层: %+v", e)
 	}
 }
 
-// TestApprovalEvaluateAllowDeny 验证 allow/deny 直觉路径。
+// TestApprovalEvaluateAllowDeny verifies direct allow and deny decisions.
 func TestApprovalEvaluateAllowDeny(t *testing.T) {
 	svc := approval.New(presetPolicy, userq.New(userq.NewStub()))
 	dec, _ := svc.Evaluate(approval.Request{Tool: "bash", Preset: "danger", CallID: "c1"})
@@ -82,12 +77,12 @@ func TestApprovalEvaluateAllowDeny(t *testing.T) {
 	}
 }
 
-// TestApprovalAskAllowedOnce 验证 ask→allowed-once：通过一次仅放行当次，下次继续 ask。
+// TestApprovalAskAllowedOnce permits only the approved call and prompts again for the next one.
 func TestApprovalAskAllowedOnce(t *testing.T) {
-	// 答案 0=准许。
+	// Answer 0 allows the call.
 	svc := approval.New(presetPolicy, userq.New(&fixedAnswerProvider{ans: 0}))
 
-	// default(ask-dangerous) + 危险工具 bash → ask → 准许 → allow。
+	// Default ask-dangerous plus bash triggers a prompt, whose approval allows the call.
 	dec, err := svc.Evaluate(approval.Request{Tool: "bash", Preset: "default", CallID: "call-1"})
 	if err != nil {
 		t.Fatal(err)
@@ -99,7 +94,7 @@ func TestApprovalAskAllowedOnce(t *testing.T) {
 		t.Fatalf("应恰好 ask 1 次, 实际 %d", svc.AskCount())
 	}
 
-	// 下一次同工具调用：不被永久放行，继续 ask（次数增至 2）。
+	// The next call to the same tool prompts again; approval is not permanent.
 	dec, err = svc.Evaluate(approval.Request{Tool: "bash", Preset: "default", CallID: "call-2"})
 	if err != nil {
 		t.Fatal(err)
@@ -112,9 +107,9 @@ func TestApprovalAskAllowedOnce(t *testing.T) {
 	}
 }
 
-// TestApprovalAskRejected 验证 ask 被拒绝 → deny。
+// TestApprovalAskRejected denies a rejected prompt.
 func TestApprovalAskRejected(t *testing.T) {
-	// 答案 1=拒绝。
+	// Answer 1 denies the call.
 	svc := approval.New(presetPolicy, userq.New(&fixedAnswerProvider{ans: 1}))
 	dec, err := svc.Evaluate(approval.Request{Tool: "bash", Preset: "default", CallID: "c1"})
 	if err != nil {
@@ -125,7 +120,7 @@ func TestApprovalAskRejected(t *testing.T) {
 	}
 }
 
-// TestApprovalUQFailureDeny 验证 UQ 失败 → fail-closed deny + 错误上抛。
+// TestApprovalUQFailureDeny fails closed and propagates User Questions errors.
 func TestApprovalUQFailureDeny(t *testing.T) {
 	svc := approval.New(presetPolicy, userq.New(&failingAnswerProvider{}))
 	dec, err := svc.Evaluate(approval.Request{Tool: "bash", Preset: "default", CallID: "c1"})
@@ -137,9 +132,9 @@ func TestApprovalUQFailureDeny(t *testing.T) {
 	}
 }
 
-// TestApprovalNonDangerousAllows 验证 ask-dangerous 下非危险工具直接 allow，不 ask。
+// TestApprovalNonDangerousAllows permits safe tools under ask-dangerous without prompting.
 func TestApprovalNonDangerousAllows(t *testing.T) {
-	svc := approval.New(presetPolicy, userq.New(&fixedAnswerProvider{ans: 1})) // 即便会拒绝也不触发
+	svc := approval.New(presetPolicy, userq.New(&fixedAnswerProvider{ans: 1})) // The provider must not be invoked, even though it would reject.
 	dec, err := svc.Evaluate(approval.Request{Tool: "goal_list", Preset: "default", CallID: "c1"})
 	if err != nil {
 		t.Fatal(err)

@@ -1,6 +1,6 @@
-// publicname.go 复刻官方 mcp-client/tools 的公共名推导：MCP 工具的稳定身份是
-// (server, raw)，模型面公共名为 mcp__<server>__<raw>；当字符替换或截断到函数名
-// 约束（64 字符、[A-Za-z0-9_-]）时追加身份哈希，避免不同身份塌缩为同名。
+// Public MCP names match mcp-client/tools: stable identity is (server, raw) and
+// the model-facing name is mcp__<server>__<raw>. Sanitization or truncation to the
+// 64-character [A-Za-z0-9_-] limit appends an identity hash to prevent collisions.
 package mcp
 
 import (
@@ -9,14 +9,14 @@ import (
 	"regexp"
 )
 
-// MaxPublicNameLength 是函数名长度上限。
+// MaxPublicNameLength limits function-name length.
 const MaxPublicNameLength = 64
 
 const hashLength = 12
 
 var invalidNameChars = regexp.MustCompile(`[^A-Za-z0-9_-]`)
 
-// PublicToolName 由 (serverName, rawName) 确定性推导模型面公共名。
+// PublicToolName deterministically derives a public name from server and raw names.
 func PublicToolName(serverName, rawName string) string {
 	joined := "mcp__" + serverName + "__" + rawName
 	normalized := invalidNameChars.ReplaceAllString(joined, "_")

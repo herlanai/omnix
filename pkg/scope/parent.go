@@ -1,8 +1,7 @@
-// 本文件补充官方 scope 的父作用域链（bindScopeParent / scopeParentOf / scopeChainOf）。
-//
-// 作用域除了"层栈叠加"，还可以显式声明自己的外层（父）作用域，从而在解析时沿
-// 祖先链向上回溯。父关系是一张有向无环图：任何绑定都会做环检测，沿父链若能走回
-// 起点，说明会成环，立即拒绝——因为所有链消费者都要沿父走到根。
+// Explicit scope parents supplement layered scopes, matching bindScopeParent,
+// scopeParentOf, and scopeChainOf upstream. Resolution walks the ancestor chain.
+// Bindings form a DAG: reject links that would return to the starting scope so
+// all consumers can safely walk to the root.
 package scope
 
 import (
@@ -10,33 +9,32 @@ import (
 	"sync"
 )
 
-// ErrAlreadyBound 表示某 key 已绑定父，重复绑定被拒。
+// ErrAlreadyBound rejects a second parent binding for a key.
 var ErrAlreadyBound = errors.New("scope: key already bound to a parent")
 
-// ErrCycle 表示该父绑定会形成环。
+// ErrCycle indicates that a proposed parent link would create a cycle.
 var ErrCycle = errors.New("scope: parent link would form a cycle")
 
-// ParentTree 是作用域父关系注册表，并发安全。
+// ParentTree is a concurrency-safe scope-parent registry.
 type ParentTree struct {
 	mu      sync.RWMutex
 	parents map[Key]Key
 }
 
-// NewParentTree 创建空父关系表。
+// NewParentTree creates an empty parent registry.
 func NewParentTree() *ParentTree {
 	return &ParentTree{parents: map[Key]Key{}}
 }
 
-// Bind 把 parent 绑定为 key 的父作用域（一次性）。
-//   - key 已有父 → ErrAlreadyBound；
-//   - 沿 parent 向上若遇到 key（会成环）→ ErrCycle。
+// Bind assigns a parent once. Existing bindings return ErrAlreadyBound;
+// a parent chain reaching key returns ErrCycle.
 func (t *ParentTree) Bind(key, parent Key) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if _, exists := t.parents[key]; exists {
 		return ErrAlreadyBound
 	}
-	// 环检测：从 parent 沿父链走，遇到 key 即成环。
+	// Walk from parent upward; reaching key would create a cycle.
 	for cursor := parent; ; {
 		if cursor == key {
 			return ErrCycle
@@ -51,7 +49,7 @@ func (t *ParentTree) Bind(key, parent Key) error {
 	return nil
 }
 
-// Rebind 重新链接 key 的父（同样做环检测），不要求 key 已绑定。
+// Rebind replaces or establishes a parent link after cycle detection.
 func (t *ParentTree) Rebind(key, parent Key) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -69,7 +67,7 @@ func (t *ParentTree) Rebind(key, parent Key) error {
 	return nil
 }
 
-// ParentOf 返回 key 的父；根作用域返回 false。
+// ParentOf returns a key's parent, or false for a root scope.
 func (t *ParentTree) ParentOf(key Key) (Key, bool) {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
@@ -77,12 +75,12 @@ func (t *ParentTree) ParentOf(key Key) (Key, bool) {
 	return p, ok
 }
 
-// ChainOf 返回 key → 根祖先的链（nearest-first：[key, parent, grandparent, …]）。
+// ChainOf returns key and its ancestors nearest-first, ending at the root.
 func (t *ParentTree) ChainOf(key Key) []Key {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	chain := []Key{}
-	visited := map[Key]struct{}{} // 防御性：即便数据异常也不死循环
+	visited := map[Key]struct{}{} // Guard against infinite loops even if stored data is invalid.
 	for cursor := key; ; {
 		if _, seen := visited[cursor]; seen {
 			break

@@ -1,4 +1,4 @@
-// Package tests 的 PTC run_code 桥接（tools/ptc.go + coderuntime）验收测试。
+// PTC run_code bridge tests for tools/ptc.go and coderuntime.
 package tests
 
 import (
@@ -9,7 +9,7 @@ import (
 	"github.com/herlanai/omnix/pkg/tools"
 )
 
-// stubRuntime 是可编程的代码执行后端桩。
+// stubRuntime is a programmable code-execution backend stub.
 type stubRuntime struct {
 	lang     string
 	isol     string
@@ -18,7 +18,7 @@ type stubRuntime struct {
 	bindings []coderuntime.BindingNamespace
 }
 
-func (s *stubRuntime) Language() string { return s.lang }
+func (s *stubRuntime) Language() string  { return s.lang }
 func (s *stubRuntime) Isolation() string { return s.isol }
 func (s *stubRuntime) Run(req *coderuntime.RunRequest) (*coderuntime.RunResult, error) {
 	s.gotReq = req
@@ -47,7 +47,7 @@ func TestRunCodeDelegatesToRuntime(t *testing.T) {
 	if !ok || o.Result != "ok" || len(o.Logs) != 1 {
 		t.Fatalf("unexpected output %+v", out)
 	}
-	// 应把工具集映射为 "tools" 命名空间
+	// Map the tool set into the tools namespace.
 	if len(rt.bindings) != 1 || rt.bindings[0].Global != "tools" {
 		t.Fatal("a tools binding namespace must be passed to runtime")
 	}
@@ -86,7 +86,7 @@ func TestRunCodeBindingInvokesTool(t *testing.T) {
 	rt := &stubRuntime{result: &coderuntime.RunResult{}}
 	tool := tools.NewRunCodeTool(rt, lookup, nil)
 
-	// 手动取出绑定命名空间并调用 __dispatch__，验证程序内工具调用链路
+	// Invoke __dispatch__ through the bound namespace to verify programmatic tool calls.
 	_, _ = tool.Execute(context.Background(), map[string]any{"code": "start", "description": "boot"})
 	dispatch := rt.bindings[0].Functions["__dispatch__"]
 	v, err := dispatch(context.Background(), map[string]any{

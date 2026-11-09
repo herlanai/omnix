@@ -1,4 +1,4 @@
-// 本文件对应任务 M38：Settings 接缝 + pathop + CAS + secrets。
+// M38 settings path operations, CAS, and secrets tests.
 package tests
 
 import (
@@ -8,7 +8,7 @@ import (
 	"github.com/herlanai/omnix/pkg/settings"
 )
 
-// TestSettingsPathOpSecrets 验证 secret 字段 describe(redactSecrets:true) 只给操作位、value 脱敏。
+// TestSettingsPathOpSecrets redacts secret values while retaining operations in Describe.
 func TestSettingsPathOpSecrets(t *testing.T) {
 	ns := settings.NewNamespace("omnix")
 	ns.MarkSecret("credentials.api_key")
@@ -18,17 +18,17 @@ func TestSettingsPathOpSecrets(t *testing.T) {
 	_ = s.ApplyHost("sandbox.mode", "read-only")
 	_ = s.ApplyHost("credentials.api_key", "sk-secret-123")
 
-	// 更新 session 层：覆盖 sandbox.mode + 设置 credentials.secret
+	// Override sandbox.mode and set credentials.secret in the session layer.
 	err := s.Update(0, map[settings.Path]settings.PathOp{
-		"sandbox.mode":        settings.NewSetOp("workspace-write"),
-		"credentials.secret":  settings.NewSetOp("supersecret"),
-		"unused.path":         settings.NewUnsetOp(),
+		"sandbox.mode":       settings.NewSetOp("workspace-write"),
+		"credentials.secret": settings.NewSetOp("supersecret"),
+		"unused.path":        settings.NewUnsetOp(),
 	})
 	if err != nil {
 		t.Fatalf("Update 失败: %v", err)
 	}
 
-	// describe(redactSecrets:true)：secret 只给 op，不给 value
+	// With redactSecrets=true, expose the operation but omit the secret value.
 	desc := s.Describe(true)
 	apiKey := findPath(desc, "credentials.api_key")
 	secret := findPath(desc, "credentials.secret")
@@ -45,14 +45,14 @@ func TestSettingsPathOpSecrets(t *testing.T) {
 		t.Fatal("secret 标记应为 true")
 	}
 
-	// describe(redactSecrets:false)：可见明文
+	// With redactSecrets=false, expose the plaintext value.
 	descOpen := s.Describe(false)
 	if p := findPath(descOpen, "credentials.secret"); p == nil || p.Value != "supersecret" {
 		t.Fatalf("不脱敏时应可见明文: %+v", p)
 	}
 }
 
-// findPath 在 describe 结果中查找路径。
+// findPath locates a path in Describe output.
 func findPath(list []settings.DescribedSetting, p settings.Path) *settings.DescribedSetting {
 	for i := range list {
 		if list[i].Path == p {
@@ -62,12 +62,12 @@ func findPath(list []settings.DescribedSetting, p settings.Path) *settings.Descr
 	return nil
 }
 
-// TestSettingsCASConcurrent 验证并发两次 replace 后写 expectedRevision 不符触发 CAS 错误。
+// TestSettingsCASConcurrent rejects updates with a stale expectedRevision.
 func TestSettingsCASConcurrent(t *testing.T) {
 	ns := settings.NewNamespace("omnix")
 	s := settings.NewSettingsScope(ns)
 
-	// 第一次 replace（version 0 → 1）
+	// The first replace advances version 0 to 1.
 	if _, err := 0, func() error {
 		return s.Replace(0, map[settings.Path]any{"a": 1})
 	}(); err != nil {
@@ -78,7 +78,7 @@ func TestSettingsCASConcurrent(t *testing.T) {
 		t.Fatalf("首次 replace 后 revision = %d, want 1", rev1)
 	}
 
-	// 模拟并发：拿到 rev1 后再有另一次 replace 成功（revision → 2）
+	// After observing revision 1, another successful replace advances it to 2.
 	if err := s.Replace(rev1, map[settings.Path]any{"b": 2}); err != nil {
 		t.Fatalf("第二次 replace 失败: %v", err)
 	}
@@ -86,7 +86,7 @@ func TestSettingsCASConcurrent(t *testing.T) {
 		t.Fatalf("第二次 replace 后 revision = %d, want 2", s.Revision())
 	}
 
-	// 现在用过期的 rev1 再写 → CAS 冲突
+	// Writing with stale revision 1 must produce a CAS conflict.
 	err := s.Replace(rev1, map[settings.Path]any{"c": 3})
 	if !settings.IsRevisionMismatch(err) {
 		t.Fatalf("过期修订号写入应触发 CAS 错误, 实际 %v", err)
@@ -100,7 +100,7 @@ func TestSettingsCASConcurrent(t *testing.T) {
 	}
 }
 
-// asRevMismatch 便捷类型断言。
+// asRevMismatch performs a convenient type assertion.
 func asRevMismatch(err error, target **settings.ErrRevisionMismatch) bool {
 	e, ok := err.(*settings.ErrRevisionMismatch)
 	if ok {
@@ -109,18 +109,18 @@ func asRevMismatch(err error, target **settings.ErrRevisionMismatch) bool {
 	return ok
 }
 
-// TestSettingsNearestWins 验证 host 默认 + session 覆盖（nearest-wins）。
+// TestSettingsNearestWins verifies session overrides take precedence over host defaults.
 func TestSettingsNearestWins(t *testing.T) {
 	ns := settings.NewNamespace("omnix")
 	s := settings.NewSettingsScope(ns)
 	_ = s.ApplyHost("sandbox.mode", "read-only")
 
-	// 未覆盖前读到 host 值
+	// Read the host value before overriding it.
 	if v, ok := s.Get("sandbox.mode"); !ok || !strings.Contains(string(v), "read-only") {
 		t.Fatalf("未覆盖时应读到 host 默认: %q ok=%v", v, ok)
 	}
 
-	// session 覆盖
+	// Apply a session override.
 	if err := s.Update(0, map[settings.Path]settings.PathOp{
 		"sandbox.mode": settings.NewSetOp("danger-full-access"),
 	}); err != nil {
@@ -130,7 +130,7 @@ func TestSettingsNearestWins(t *testing.T) {
 		t.Fatalf("session 覆盖后应读到新值: %q ok=%v", v, ok)
 	}
 
-	// describe 中 op 为 set（session 层）
+	// Describe must report the session-layer set operation.
 	desc := s.Describe(true)
 	if p := findPath(desc, "sandbox.mode"); p == nil || p.Op != "set" {
 		t.Fatalf("session 覆盖后 op 应为 set: %+v", p)

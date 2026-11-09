@@ -28,11 +28,11 @@ Agent 位于 **SessionLog**（持久化真相）和 **LLM/工具**（外部服�
 
 ```go
 type AgentOptions struct {
-    Provider         string        // provider 路由（如 "deepseek"）
-    Model            string        // 模型 ID（如 "deepseek-chat"）
-    ReasoningEffort  string        // 适配器拥有的推理级别
-    MaxTokens        int           // 每次请求的最大输出 token 数
-    DefaultTimeout   time.Duration // 默认运行超时（0 = 无）
+    Provider         string        // Provider route, such as "deepseek".
+    Model            string        // Model ID, such as "deepseek-chat".
+    ReasoningEffort  string        // Adapter-defined reasoning level.
+    MaxTokens        int           // Maximum output tokens per request.
+    DefaultTimeout   time.Duration // Default execution timeout; zero means none.
 }
 ```
 
@@ -66,10 +66,10 @@ Agent 恰好有两个可观察状态，在每次转换时通过 `agent/status` �
 | `running` | 驱动程序正在主动处理 | 在 `runTurn` 开始时（在 `turn/start` 之前） |
 
 ```go
-// 查询当前状态
-status := agent.Status()  // "idle" 或 "running"
+// Query the current state.
+status := agent.Status()  // "idle" or "running".
 
-// 等待静止（阻塞直到 idle）
+// Wait until the agent becomes idle.
 err := agent.WhenIdle(ctx)
 ```
 
@@ -84,9 +84,9 @@ err := agent.WhenIdle(ctx)
 ```go
 agent.Run("做某事")
 if err := agent.WhenIdle(context.Background()); err != nil {
-    // 上下文已取消
+    // The context was canceled.
 }
-// agent 现在是 idle，session 日志已完成
+// The agent is idle and its session log is complete.
 ```
 
 ## Inbox：双队列待处理工作
@@ -112,19 +112,19 @@ Inbox 是 Agent 拥有的持久化待处理消息的投影。它维护**两个�
 ```go
 inbox := agent.Inbox()
 
-// 检查是否有待处理工作
-inbox.HasPending()  // 如果任一队列非空则为 true
+// Check for pending work.
+inbox.HasPending()  // True if either queue contains work.
 
-// 推送消息到 next-step（引导输入）
+// Enqueue guidance for the next step.
 inbox.Push(log, session.InboxNextStep, UserMessage{Content: "也检查一下测试"})
 
-// 推送消息到 next-turn（下一个用户请求）
+// Enqueue the next user request for the next turn.
 inbox.Push(log, session.InboxNextTurn, UserMessage{Content: "现在做这个"})
 
-// 认领一个 step 的批次（移除并返回 next-step + 可选的一个 next-turn）
+// Claim a step batch: remove and return next-step items and optionally one next-turn item.
 batch := inbox.Claim(log, session.InboxNextTurn, turnIdx)
 
-// 清除所有待处理工作（取消时）
+// Clear all pending work on cancellation.
 inbox.Clear(log)
 ```
 
@@ -134,11 +134,11 @@ inbox.Clear(log)
 
 ```go
 type InboxSplicedData struct {
-    Target       InboxTarget // "next-turn" 或 "next-step"
-    Start        int         // 拼接位置（-1 = 追加）
-    RemovedCount int         // 移除的数量
-    Inserted     []string    // 插入的内容
-    Outcome      string      // 取消清除时为 "canceled"
+    Target       InboxTarget // "next-turn" or "next-step".
+    Start        int         // Splice position; -1 means append.
+    RemovedCount int         // Number of items removed.
+    Inserted     []string    // Inserted content.
+    Outcome      string      // "canceled" when cleared during cancellation.
 }
 ```
 
@@ -157,11 +157,11 @@ Agent 支持五种取消原因（与官方 `AgentCancelCause` 对齐）：
 | `legacy` | 历史/兼容性路径 | 旧的取消代码 |
 
 ```go
-// 取消活动的 turn
+// Cancel the active turn.
 agent.Cancel(CancelUser)
 
-// 取消但保留排队的 inbox 项
-agent.Cancel(CancelUser)  // 配合 CancelOptions{KeepInbox: true}
+// Cancel while retaining queued inbox items.
+agent.Cancel(CancelUser)  // Use with CancelOptions{KeepInbox: true}.
 ```
 
 ### 取消做了什么
@@ -178,9 +178,9 @@ agent.Cancel(CancelUser)  // 配合 CancelOptions{KeepInbox: true}
 
 ```go
 type PreStepDecision struct {
-    Kind               string        // "reject" 或 "enter"
-    Messages           []UserMessage // 携带的消息（仅 enter）
-    StartsRequestSeries bool         // 启动新的 model-message 系列
+    Kind               string        // "reject" or "enter".
+    Messages           []UserMessage // Accompanying message, for enter only.
+    StartsRequestSeries bool         // Start a new model-message sequence.
 }
 ```
 
@@ -210,22 +210,22 @@ TerminalRetryDecision（兜底）
 
 ```go
 type RequestErrorAction struct {
-    Kind   RequestErrorActionKind // "retry" 或 "abort"
-    Reason string                 // 审计原因
+    Kind   RequestErrorActionKind // "retry" or "abort".
+    Reason string                 // Audit reason.
 }
 
-// 构建带自定义中间件的瀑布
+// Build a waterfall with custom middleware.
 chain := NewRequestErrorWaterfall(
     func(ctx context.Context, p *RequestErrorPayload, next func()) {
         if p.RetryableError && p.RetryCount < 3 {
             p.Action = &RequestErrorAction{Kind: ActionRetry, Reason: "自定义重试策略"}
-            return  // 短路
+            return  // Short-circuit.
         }
         next()
     },
 )
 
-// 解析最终动作
+// Resolve the final action.
 action := ResolveRequestError(chain, payload)
 ```
 

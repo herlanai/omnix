@@ -1,4 +1,4 @@
-// 本文件对应任务 M12：Goal 系统（状态机 + 续轮驱动 + 6 工具）。
+// M12 Goal state machine, round driver, and six-tool integration tests.
 package tests
 
 import (
@@ -11,12 +11,12 @@ import (
 	"github.com/herlanai/omnix/pkg/tools"
 )
 
-// TestGoalRoundDriverAutoRounds 验证 set_goal(active, maxRounds=5) 无用户输入自动续 5 轮。
+// TestGoalRoundDriverAutoRounds runs five automatic turns for an active goal with maxRounds=5.
 func TestGoalRoundDriverAutoRounds(t *testing.T) {
 	sl := session.NewSessionLog(brand.NewSessionID("goal_1"))
 	ts := goal.NewGoalToolset(sl)
 
-	// 创建目标（maxRounds=5）
+	// Create a goal with maxRounds=5.
 	root, _ := ts.Tools()[0].Name, ts.Tools()[0]
 	_ = root
 	g := goal.NewGoal("g1", "实现任务", 5)
@@ -40,7 +40,7 @@ func TestGoalRoundDriverAutoRounds(t *testing.T) {
 	}
 }
 
-// TestGoalReportBlockerConcludeTurn 验证 goal_report_blocker → concludeTurn 结束 turn。
+// TestGoalReportBlockerConcludeTurn ends the turn through concludeTurn after reporting a blocker.
 func TestGoalReportBlockerConcludeTurn(t *testing.T) {
 	sl := session.NewSessionLog(brand.NewSessionID("goal_2"))
 	ts := goal.NewGoalToolset(sl)
@@ -49,7 +49,7 @@ func TestGoalReportBlockerConcludeTurn(t *testing.T) {
 	}
 
 	concluded := false
-	// 注入 conclude 回调（模拟 Agent 注册）
+	// Inject the conclude callback to simulate Agent registration.
 	ctx := tools.WithConclude(context.Background(), func(reason string) { concluded = true })
 	tool := ts.Tools()[5] // goal_report_blocker
 	_, err := tool.Execute(ctx, map[string]any{"blocker": "缺依赖"})
@@ -59,24 +59,24 @@ func TestGoalReportBlockerConcludeTurn(t *testing.T) {
 	if !concluded {
 		t.Fatal("report_blocker 应触发 concludeTurn")
 	}
-	// 状态应变 blocked
+	// The goal must become blocked.
 	cur, _ := goal.FromLog(sl)
 	if cur.Phase != goal.PhaseBlocked {
 		t.Fatalf("report_blocker 后 phase 应为 blocked: %+v", cur)
 	}
 }
 
-// TestGoalCASRevision 验证 CAS Revision 冲突报错并发保护（revision 单增）。
+// TestGoalCASRevision verifies monotonically increasing revisions and CAS protection.
 func TestGoalCASRevision(t *testing.T) {
 	sl := session.NewSessionLog(brand.NewSessionID("goal_3"))
 	ts := goal.NewGoalToolset(sl)
 
-	// 创建目标
+	// Create a goal.
 	if err := writeGoalForTest(sl, goal.NewGoal("g3", "任务", 3)); err != nil {
 		t.Fatalf("写目标失败: %v", err)
 	}
 
-	// 两次 set_description：revision 应单增（1→2→3）
+	// Two description updates advance revisions from 1 to 2 to 3.
 	tool := ts.Tools()[2]
 	if _, err := tool.Execute(context.Background(), map[string]any{"description": "新描述1"}); err != nil {
 		t.Fatalf("首次 set_description 失败: %v", err)
@@ -93,7 +93,7 @@ func TestGoalCASRevision(t *testing.T) {
 	}
 }
 
-// TestGoalSixTools 验证 6 个工具均可用。
+// TestGoalSixTools verifies all six tools are available.
 func TestGoalSixTools(t *testing.T) {
 	sl := session.NewSessionLog(brand.NewSessionID("goal_4"))
 	ts := goal.NewGoalToolset(sl)
@@ -107,7 +107,7 @@ func TestGoalSixTools(t *testing.T) {
 	for _, tl := range ts.Tools() {
 		names = append(names, tl.Name)
 	}
-	// list 应能读到目标
+	// Listing must return the goal.
 	out, err := ts.Tools()[0].Execute(context.Background(), map[string]any{})
 	if err != nil {
 		t.Fatalf("goal_list 失败: %v", err)
@@ -118,7 +118,7 @@ func TestGoalSixTools(t *testing.T) {
 	_ = names
 }
 
-// writeGoalForTest 测试辅助写目标。
+// writeGoalForTest writes a goal for tests.
 func writeGoalForTest(sl *session.SessionLog, g goal.Goal) error {
 	_, err := sl.Append(session.GoalChangeData{
 		GoalID:      g.ID,

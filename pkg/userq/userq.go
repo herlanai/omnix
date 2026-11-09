@@ -1,11 +1,8 @@
-// Package userq 提供 User Questions（用户提问）接缝。
-//
-// 对齐上游：packages/interaction/user-questions
-//
-// 设计要点：
-//   - UQ 服务接口 Ask(ctx, options) → (idx, custom, err)：向用户提问并收集选择/自定义输入；
-//   - provider_stub 实现同步阻塞返回默认选项（测试用）；生产由 SDK 注入真实 UI/回调实现；
-//   - 支持多选（multiSelect）与意图标签（intent），决策逻辑只与接口耦合，可无缝替换 provider。
+// Package userq provides User Questions, matching interaction/user-questions.
+// Ask collects selections or custom input through an interchangeable provider.
+// The synchronous test stub returns defaults; production SDKs inject real UI or
+// callbacks. Multi-selection and intent labels keep decision logic independent
+// of the presentation backend.
 package userq
 
 import (
@@ -13,58 +10,57 @@ import (
 	"fmt"
 )
 
-// QuestionOptions 描述一次提问的选项。
+// QuestionOptions describes a question and its options.
 type QuestionOptions struct {
-	// Prompt 向用户展示的问题文本。
+	// Prompt is the user-facing question.
 	Prompt string
-	// Choices 候选选项列表。
+	// Choices lists candidate answers.
 	Choices []string
-	// DefaultIndex 默认选中项下标（-1 表示无默认）。
+	// DefaultIndex is the default selection; -1 means none.
 	DefaultIndex int
-	// MultiSelect 是否允许多选（此时返回逗号分隔的选项下标）。
+	// MultiSelect permits multiple selected indices.
 	MultiSelect bool
-	// Intent 意图标签（如 "approval" / "plan-exit" / "goal-blocker"）。
+	// Intent labels the question, such as approval, plan-exit, or goal-blocker.
 	Intent string
 }
 
-// QuestionResult 是提问结果。
+// QuestionResult contains a response.
 type QuestionResult struct {
-	// SelectedIndex 选中的选项下标（多选时为第一个）。
+	// SelectedIndex is the selected option, or the first in a multi-selection.
 	SelectedIndex int
-	// Custom 用户自定义输入（选择"other/custom"时）。
+	// Custom contains user-entered custom input.
 	Custom string
-	// SelectedIndices 多选时的全部下标。
+	// SelectedIndices contains all multi-selected indices.
 	SelectedIndices []int
 }
 
-// Provider 是用户提问的后端接口。
+// Provider is the question backend interface.
 type Provider interface {
-	// Ask 阻塞直到获得用户回答，返回 (result, error)。
+	// Ask blocks until an answer and returns its result or error.
 	Ask(ctx context.Context, opts QuestionOptions) (*QuestionResult, error)
 }
 
-// Service 是用户提问服务（可切换 provider）。
+// Service supports replaceable question providers.
 type Service struct {
 	provider Provider
 }
 
-// New 创建提问服务。
+// New creates a question service.
 func New(p Provider) *Service {
 	return &Service{provider: p}
 }
 
-// SetProvider 运行时切换 provider（SDK 注入真实实现）。
+// SetProvider replaces the provider at runtime for SDK integration.
 func (s *Service) SetProvider(p Provider) {
 	s.provider = p
 }
 
-// Provider 返回当前 provider（供测试断言）。
+// Provider returns the current provider for assertions.
 func (s *Service) Provider() Provider {
 	return s.provider
 }
 
-// Ask 向用户提问，返回 (idx, custom, err)。
-// 兼容上游签名：selection index + custom string。
+// Ask returns selection index, custom text, and error, matching the upstream signature.
 func (s *Service) Ask(ctx context.Context, opts QuestionOptions) (int, string, error) {
 	if s.provider == nil {
 		return 0, "", fmt.Errorf("userq: no provider installed")
@@ -76,7 +72,7 @@ func (s *Service) Ask(ctx context.Context, opts QuestionOptions) (int, string, e
 	return res.SelectedIndex, res.Custom, nil
 }
 
-// AskDetailed 返回完整提问结果（含多选下标）。
+// AskDetailed returns the complete response, including multiple indices.
 func (s *Service) AskDetailed(ctx context.Context, opts QuestionOptions) (*QuestionResult, error) {
 	if s.provider == nil {
 		return nil, fmt.Errorf("userq: no provider installed")
@@ -84,22 +80,20 @@ func (s *Service) AskDetailed(ctx context.Context, opts QuestionOptions) (*Quest
 	return s.provider.Ask(ctx, opts)
 }
 
-// ============================================================================
-// Provider Stub（同步阻塞，测试用）
-// ============================================================================
+// Synchronous test provider.
 
-// StubProvider 是同步阻塞的测试 provider：总是返回默认选项。
+// StubProvider returns default selections synchronously for tests.
 type StubProvider struct {
-	// DefaultIndex 默认返回的选项下标。
+	// DefaultIndex is the default returned selection.
 	DefaultIndex int
 }
 
-// NewStub 创建默认返回第 0 项的 stub。
+// NewStub creates a stub defaulting to the first option.
 func NewStub() *StubProvider {
 	return &StubProvider{DefaultIndex: 0}
 }
 
-// Ask 实现 Provider：返回默认选中项（custom 为空）。
+// Ask implements Provider with a default selection and empty custom text.
 func (s *StubProvider) Ask(ctx context.Context, opts QuestionOptions) (*QuestionResult, error) {
 	idx := opts.DefaultIndex
 	if idx < 0 || idx >= len(opts.Choices) {
@@ -110,7 +104,7 @@ func (s *StubProvider) Ask(ctx context.Context, opts QuestionOptions) (*Question
 	}
 	selected := []int{idx}
 	if opts.MultiSelect {
-		// stub 多选：返回全部下标
+		// For multi-selection, the stub returns every index.
 		selected = make([]int, 0, len(opts.Choices))
 		for i := range opts.Choices {
 			selected = append(selected, i)

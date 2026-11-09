@@ -30,7 +30,7 @@ layout: hextra-home
 
 <div class="hx-mt-8"></div>
 
-<!-- ========== 架构图（带动效数据流） ========== -->
+<!-- Architecture diagram with animated data flow. -->
 {{< arch-diagram >}}
 
 <div class="hx-mt-8"></div>

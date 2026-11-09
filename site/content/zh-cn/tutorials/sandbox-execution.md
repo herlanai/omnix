@@ -64,16 +64,16 @@ const (
 ```go
 ps := sandbox.NewPolicyService(sandbox.ModeReadOnly, "/fallback/root")
 
-// 1) 会话记录了 workspace-write → 覆盖默认模式
+// 1. The session's workspace-write mode overrides the default.
 p1 := ps.Resolve(sandbox.SandboxPolicyRequest{Session: sess})
 // p1.Mode = "workspace-write", p1.WorkspaceRoot = sess.Cwd()
 
-// 2) 显式 override → 最高优先级，越过会话记录
+// 2. An explicit override takes precedence over session state.
 danger := sandbox.ModeDangerFullAccess
 p2 := ps.Resolve(sandbox.SandboxPolicyRequest{Session: sess, Mode: &danger})
 // p2.Mode = "danger-full-access", p2.IsDanger() = true
 
-// 3) 无会话（agentless）→ 回落部署默认 + 回落根
+// 3. Without a session, use deployment defaults and the fallback root.
 p3 := ps.Resolve(sandbox.SandboxPolicyRequest{})
 // p3.Mode = "read-only", p3.WorkspaceRoot = "/fallback/root"
 ```
@@ -86,9 +86,9 @@ p3 := ps.Resolve(sandbox.SandboxPolicyRequest{})
 
 ```go
 type SandboxProvider interface {
-    // Confine 把 argv 包裹为在指定策略下受约束执行的形式。
-    // 必须 FAIL CLOSED：无可用后端或包裹失败时返回错误，
-    // 绝不允许静默无约束放行。
+    // Confine wraps argv for execution under the specified policy.
+    // Fail closed when no backend is available or wrapping fails;
+    // never silently allow unconfined execution.
     Confine(argv []string, policy SandboxPolicy) (ConfinedArgv, error)
 }
 ```
@@ -135,10 +135,10 @@ func (*UnavailableProvider) Confine([]string, SandboxPolicy) (ConfinedArgv, erro
 例如，在 Linux 上使用 **bwrap (Bubblewrap)**，一个 `workspace-write` 策略会把：
 
 ```bash
-# 原始命令
+# Original command.
 ["bash", "-c", "echo hello > /workspace/app/out.txt"]
 
-# Confine() 之后（bwrap）
+# After Confine using bwrap.
 ["bwrap",
  "--ro-bind", "/", "/",                    # 根目录以只读挂载
  "--dev", "/dev",                           # 提供 /dev
@@ -179,23 +179,23 @@ func (*UnavailableProvider) Confine([]string, SandboxPolicy) (ConfinedArgv, erro
 
 ```go
 type ConfinedArgv struct {
-    // Argv 是包裹后的命令：runner + profile 参数 + 分隔符 + 原始 argv。
+    // Argv contains the runner, profile arguments, separator, and original command.
     Argv []string `json:"argv"`
 
-    // Enforcement 报告后端对策略承诺的覆盖完整度。
-    //   "full"    — 后端强制执行策略声明的每一种文件效果
-    //   "partial" — 活动后端或旧内核 ABI 只覆盖子集；
-    //               要求绝对边界的消费者不得当作 full 使用
+    // Enforcement reports how completely the backend implements the policy.
+    //   "full": the backend enforces every declared filesystem effect.
+    //   "partial": the backend or older kernel ABI covers only a subset;
+    //              consumers requiring a strict boundary must not treat this as full.
     Enforcement SandboxEnforcement `json:"enforcement"`
 
-    // DenialSignatures 是表示"沙箱拒绝了"的 stderr 子串集合。
-    // 当包裹后的命令失败时，消费者扫描 stderr 查找这些子串，
-    // 以区分"沙箱拒绝了写入"和"命令本身失败了"。
+    // DenialSignatures lists stderr substrings identifying sandbox denials.
+    // When the wrapped command fails, scan stderr for these signatures
+    // to distinguish a denied write from a command failure.
     DenialSignatures []string `json:"denialSignatures"`
 
-    // RunnerFailureRules 是结构化规则，用于区分"沙箱 runner 自身启动失败"
-    // 和"命令运行后以非零码退出"。这很重要：runner 失败是基础设施问题
-    // （重试 / 告警），而命令失败是正常的业务结果。
+    // RunnerFailureRules distinguish sandbox-runner startup failures
+    // from commands that execute and return a nonzero exit code. Runner failures
+    // are infrastructure problems needing retries or alerts; command failures are normal results.
     RunnerFailureRules []RunnerFailureRule `json:"runnerFailureRules"`
 }
 ```
@@ -212,9 +212,9 @@ type ConfinedArgv struct {
 
 ```go
 type RunnerFailureRule struct {
-    AllowedExitCodes   []int    // 可能是 runner 失败的非零退出码
-    FatalSignatures    []string // 确认 runner 失败的 stderr 子串
-    InformationalLines []string // 匹配前忽略的完整 stderr 行（如 fallback 警告）
+    AllowedExitCodes   []int    // Nonzero exit codes that may indicate a runner failure.
+    FatalSignatures    []string // Stderr substrings confirming a runner failure.
+    InformationalLines []string // Complete stderr lines ignored before matching, such as fallback warnings.
 }
 
 func (r RunnerFailureRule) Matches(exitCode int, stderr string) (string, bool)
@@ -233,11 +233,11 @@ rule := RunnerFailureRule{
     InformationalLines: []string{"landlock: fallback to baseline"},
 }
 
-// exitCode=125，stderr 包含 fallback 警告 + 致命行
+// Exit code 125 with a fallback warning and a fatal stderr line.
 stderr := "landlock: fallback to baseline\ncannot start sandbox runner: permission denied\n"
 sig, ok := rule.Matches(125, stderr)
 // ok = true, sig = "cannot start sandbox runner"
-// （信息行在匹配前已被移除）
+// Informational lines are removed before matching.
 ```
 
 ### `SandboxExecutionPolicy` 与 `SandboxPolicy` 的区别
@@ -260,7 +260,7 @@ func (p SandboxExecutionPolicy) ToConfined() (SandboxPolicy, error) {
     case ModeWorkspaceWrite:
         return SandboxPolicy{SandboxExecutionPolicy: p, Mode: ConfinedWorkspaceWrite}, nil
     default:
-        // danger-full-access 无法被约束 — 调用方必须绕过沙箱
+        // danger-full-access cannot be confined; the caller must bypass the sandbox.
         return SandboxPolicy{}, fmt.Errorf("sandbox: cannot confine danger-full-access policy")
     }
 }
@@ -318,7 +318,7 @@ read-only  ──►  workspace-write  ──►  danger-full-access
 func CanonicalPath(path string) string {
     resolved, err := filepath.EvalSymlinks(path)
     if err != nil {
-        return filepath.Clean(path) // 保守：返回原路径
+        return filepath.Clean(path) // Conservatively return the original path.
     }
     abs, _ := filepath.Abs(resolved)
     return filepath.Clean(abs)
@@ -412,15 +412,15 @@ provider := sandbox.NewLocalProvider(&sandbox.LocalConfig{
 然后使用 `CreateProcessAsUser` 以受限令牌启动进程。因为令牌缺少管理员特权，其他目录保留其默认 ACL，进程实际上被限制了。
 
 ```go
-// 1. 创建受限令牌（DuplicateTokenEx）
+// 1. Create a restricted token using DuplicateTokenEx.
 var dupToken windows.Token
 windows.DuplicateTokenEx(procToken, windows.TOKEN_ALL_ACCESS,
     nil, windows.SecurityImpersonation, windows.TokenPrimary, &dupToken)
 
-// 2. 在工作区根目录上授予 ACL
+// 2. Grant ACL permissions on the workspace root.
 // （SetEntriesInAcl + SetNamedSecurityInfo with FILE_ALL_ACCESS）
 
-// 3. 以受限令牌启动进程
+// 3. Start the process with the restricted token.
 windows.CreateProcessAsUser(dupToken, nil, cmdLine,
     nil, nil, false, flags, envBlock, workDirPtr, &si, &pi)
 ```
@@ -436,8 +436,8 @@ windows.CreateProcessAsUser(dupToken, nil, cmdLine,
 沙箱包包含**不变量校验**，在开发期间验证内部一致性。这些由全局开关控制：
 
 ```go
-sandbox.InvariantEnabled = true  // 开发模式（默认）
-sandbox.InvariantEnabled = false // 生产模式（跳过校验以提高性能）
+sandbox.InvariantEnabled = true  // Development mode, the default.
+sandbox.InvariantEnabled = false // Production mode skips validation to reduce overhead.
 ```
 
 启用时，会校验以下不变量：
@@ -468,7 +468,7 @@ func ApproveEscalation(ctx context.Context, req EscalationRequest, approver Esca
 var widerModes = map[SandboxMode][]SandboxMode{
     ModeReadOnly:       {ModeWorkspaceWrite, ModeDangerFullAccess},
     ModeWorkspaceWrite: {ModeDangerFullAccess},
-    // danger-full-access：无（它是顶点）
+    // danger-full-access has no broader mode; it is the top of the hierarchy.
 }
 ```
 
@@ -507,7 +507,7 @@ Shell（`pkg/shell`）和文件系统（`pkg/fs`）两个消费者遵循相同�
 ```go
 policy := ps.Resolve(req)
 if policy.IsDanger() {
-    return exec.Command(argv[0], argv[1:]...) // 完全绕过沙箱
+    return exec.Command(argv[0], argv[1:]...) // Bypass the sandbox entirely.
 }
 confined, err := provider.Confine(argv, policy.ToConfined())
 if err != nil {

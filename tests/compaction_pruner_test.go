@@ -1,4 +1,4 @@
-// Package tests 的 compaction 文本修剪验收测试。
+// Compaction text-pruning tests.
 package tests
 
 import (
@@ -35,7 +35,7 @@ func TestPruneTextRuneSafe(t *testing.T) {
 	if !changed {
 		t.Fatal("should prune")
 	}
-	// 不产生替换符 U+FFFD 即未拆 rune
+	// No U+FFFD replacement character means no rune was split.
 	if strings.Contains(out, "\uFFFD") {
 		t.Fatalf("rune split: %q", out)
 	}

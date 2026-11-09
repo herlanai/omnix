@@ -1,4 +1,4 @@
-// 本文件对应任务 M10：PromptContext 动态注册与快照。
+// M10 dynamic PromptContext registration and snapshots.
 package tests
 
 import (
@@ -7,11 +7,11 @@ import (
 	"github.com/herlanai/omnix/pkg/sysprompt"
 )
 
-// TestPromptContextDynamic 验证动态添加/移除 PromptContext 下一轮 assemble 生效/失效。
+// TestPromptContextDynamic applies additions and removals on the next assembly.
 func TestPromptContextDynamic(t *testing.T) {
 	reg := sysprompt.NewContextRegistry()
 
-	// 注册两个上下文
+	// Register two contexts.
 	reg.Register("runtime_ctx", 300, "cwd=/workspace")
 	reg.Register("plan_policy", 500, "先计划再执行")
 
@@ -22,12 +22,12 @@ func TestPromptContextDynamic(t *testing.T) {
 	if hash == "" {
 		t.Fatal("非空快照应有哈希")
 	}
-	// 确定性：再次 compute 哈希一致
+	// Repeated computation must produce the same hash.
 	if _, h2 := reg.Compute(); h2 != hash {
 		t.Fatal("hash 应稳定")
 	}
 
-	// 移除一个上下文 → 下一轮 compute 变化
+	// Removing a context changes the next computed result.
 	reg.Unregister("plan_policy")
 	text2, hash2 := reg.Compute()
 	if text2 == text || hash2 == hash {
@@ -35,7 +35,7 @@ func TestPromptContextDynamic(t *testing.T) {
 	}
 }
 
-// TestPromptContextChangeDetection 验证内容变化时 hash 变化（change-only 基础）。
+// TestPromptContextChangeDetection changes the hash when content changes.
 func TestPromptContextChangeDetection(t *testing.T) {
 	reg := sysprompt.NewContextRegistry()
 	changed := reg.Register("runtime_ctx", 300, "v1")
@@ -50,26 +50,26 @@ func TestPromptContextChangeDetection(t *testing.T) {
 	}
 }
 
-// TestGoalRoundContext 验证 goal.active 注入、complete 后停止。
+// TestGoalRoundContext injects active goals and stops after completion.
 func TestGoalRoundContext(t *testing.T) {
 	active := sysprompt.GoalRoundContext{Active: true, Round: 2, GoalDesc: "实现任务"}
 	if active.Render() == "" {
 		t.Fatal("active 时应渲染续轮提示")
 	}
 
-	// goal.complete 后不再注入
+	// Stop injecting after goal completion.
 	inactive := sysprompt.GoalRoundContext{Active: false, Round: 2, GoalDesc: "实现任务"}
 	if inactive.Render() != "" {
 		t.Fatal("goal.complete 后应停止注入")
 	}
 }
 
-// TestPromptContextSnapshotPersist 验证快照可被完整保留（compaction 后可重建）。
+// TestPromptContextSnapshotPersist retains complete snapshots for reconstruction after compaction.
 func TestPromptContextSnapshotPersist(t *testing.T) {
 	reg := sysprompt.NewContextRegistry()
 	reg.Register("runtime_ctx", 300, "snapshot-value")
 
-	// 取快照（模拟 compaction 后保留）
+	// Capture a snapshot to simulate retention across compaction.
 	snap := reg.Snapshot()
 	if snap["runtime_ctx"] != "snapshot-value" {
 		t.Fatalf("快照内容异常: %v", snap)

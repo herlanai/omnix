@@ -1,4 +1,4 @@
-// Package tests 的连续重复调用检测验收测试。
+// Consecutive duplicate tool-call detection tests.
 package tests
 
 import (

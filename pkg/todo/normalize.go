@@ -1,5 +1,6 @@
-// 本文件复刻官方 toTodoList 的值约束（schema 无法表达的部分）：trim 后非空、
-// content 去重、非并行模式下最多一个 in_progress；并提供三态计数。
+// Todo normalization enforces constraints beyond schema: nonblank trimmed content,
+// unique content, and at most one in_progress item without parallel mode. It also
+// provides counts for all three states.
 package todo
 
 import (
@@ -7,19 +8,18 @@ import (
 	"strings"
 )
 
-// ErrEmptyContent 表示存在空白内容条目。
+// ErrEmptyContent indicates an item with blank content.
 var ErrEmptyContent = errors.New("todo: empty content")
 
-// ErrDuplicateContent 表示存在重复内容。
+// ErrDuplicateContent indicates repeated content.
 var ErrDuplicateContent = errors.New("todo: duplicate content")
 
-// ErrMultipleActive 表示非并行模式下出现多个 in_progress。
+// ErrMultipleActive indicates multiple in_progress items without parallel mode.
 var ErrMultipleActive = errors.New("todo: more than one in_progress")
 
-// Normalize 规范化待办列表。
-//   - trim 后空白内容 → ErrEmptyContent；
-//   - 重复 content → ErrDuplicateContent；
-//   - allowParallel=false 时多于一个 in_progress → ErrMultipleActive。
+// Normalize trims and validates todos. Blank content returns ErrEmptyContent,
+// duplicates return ErrDuplicateContent, and multiple active items without
+// allowParallel return ErrMultipleActive.
 func Normalize(items []TodoItem, allowParallel bool) ([]TodoItem, error) {
 	out := make([]TodoItem, 0, len(items))
 	seen := map[string]struct{}{}
@@ -45,14 +45,14 @@ func Normalize(items []TodoItem, allowParallel bool) ([]TodoItem, error) {
 	return out, nil
 }
 
-// Counts 是三态计数。
+// Counts holds counts for the three states.
 type Counts struct {
 	Pending    int
 	InProgress int
 	Completed  int
 }
 
-// Count 统计列表三态数量。
+// Count counts items in each state.
 func Count(items []TodoItem) Counts {
 	var c Counts
 	for _, it := range items {

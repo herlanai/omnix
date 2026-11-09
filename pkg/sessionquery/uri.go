@@ -1,5 +1,5 @@
-// uri.go 复刻官方 context/session-reference 的会话引用 URI：把不透明 session id
-// 无损编码为 omnix-session: URI、解码并校验规范化，以及 Markdown mention 渲染。
+// Session-reference URIs match context/session-reference: opaque session IDs
+// round-trip through canonical omnix-session URIs and Markdown mentions.
 package sessionquery
 
 import (
@@ -10,23 +10,23 @@ import (
 	"strings"
 )
 
-// Scheme 是会话快照引用的保留 URI scheme。
+// Scheme is reserved for session snapshot references.
 const Scheme = "omnix-session:"
 
 var enc = base64.RawURLEncoding
 
 var payloadShape = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 
-// ErrInvalidURI 会话引用 URI 非法或不规范。
+// ErrInvalidURI indicates an invalid or noncanonical session-reference URI.
 var ErrInvalidURI = errors.New("sessionquery: invalid session reference URI")
 
-// EncodeURI 把 session id 无损编码为规范 URI。
+// EncodeURI losslessly encodes a session ID as a canonical URI.
 func EncodeURI(sessionID string) string {
 	raw, _ := json.Marshal(sessionID)
 	return Scheme + enc.EncodeToString(raw)
 }
 
-// DecodeURI 解码并校验 URI 规范；非法返回 ErrInvalidURI。
+// DecodeURI validates canonical form and decodes, or returns ErrInvalidURI.
 func DecodeURI(uri string) (string, error) {
 	if !strings.HasPrefix(uri, Scheme) {
 		return "", ErrInvalidURI
@@ -51,7 +51,7 @@ func DecodeURI(uri string) (string, error) {
 
 var escapeLabel = regexp.MustCompile(`[\\\]]`)
 
-// FormatMention 渲染携带规范 URI 的 Markdown mention；label 为空时用 id 本身。
+// FormatMention renders a Markdown mention with a canonical URI; empty labels use the ID.
 func FormatMention(sessionID, label string) string {
 	if label == "" {
 		label = sessionID

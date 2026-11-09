@@ -1,4 +1,4 @@
-// Package tests 的 subagent 委托深度核算验收测试。
+// Subagent delegation-depth tests.
 package tests
 
 import (

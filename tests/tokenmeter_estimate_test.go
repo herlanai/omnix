@@ -1,4 +1,4 @@
-// Package tests 的 tokenmeter 固定密度估算验收测试。
+// Fixed-density token estimation tests.
 package tests
 
 import (
@@ -9,7 +9,8 @@ import (
 )
 
 func TestEstimateTextMessage(t *testing.T) {
-	// 8 字符文本 → ceil(8/4)=2 + blockOverhead 4 + roleOverhead 4 = 10
+	// Eight text characters cost ceil(8/4)=2 tokens plus four block and four role tokens, totaling
+	// ten.
 	msg := llm.NewUserMessage("12345678")
 	got := tokenmeter.EstimateMessage(msg)
 	if got != 10 {

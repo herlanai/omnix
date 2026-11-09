@@ -1,4 +1,4 @@
-// Package tests 的 session-reference URI 验收测试。
+// Session-reference URI tests.
 package tests
 
 import (

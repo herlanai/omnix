@@ -1,4 +1,4 @@
-// 本文件对应任务 M30：Invariant Registry 不变量校验。
+// M30 invariant registry validation tests.
 package tests
 
 import (
@@ -9,11 +9,11 @@ import (
 	"github.com/herlanai/omnix/pkg/invariant"
 )
 
-// TestInvariantPkgAttribution 验证违规错误的包归属前缀与明细。
+// TestInvariantPkgAttribution checks the owning-package prefix and error details.
 func TestInvariantPkgAttribution(t *testing.T) {
 	reg := invariant.NewRegistry()
 
-	// 注册一个必然违规的检查器（模拟 turn 已开再次 turn/start）
+	// Register an always-failing checker to simulate starting an already-open turn.
 	err := reg.Register("pkg/session", func() error {
 		return &invariant.InvariantError{Pkg: "pkg/session", Msg: "turn/start while turn already open"}
 	})
@@ -29,18 +29,18 @@ func TestInvariantPkgAttribution(t *testing.T) {
 		t.Fatalf("错误前缀不匹配: %q", failures[0].Error())
 	}
 
-	// 账本登记
+	// Record the checker in the registry.
 	ledger := reg.Ledger()
 	if len(ledger) != 1 {
 		t.Fatalf("Ledger 应有 1 条记录, 实际 %d", len(ledger))
 	}
 }
 
-// TestInvariantMultiplePkgsOrdered 验证多包注册时按包名排序输出，且各包独立。
+// TestInvariantMultiplePkgsOrdered verifies lexical package ordering and independent checks.
 func TestInvariantMultiplePkgsOrdered(t *testing.T) {
 	reg := invariant.NewRegistry()
 
-	// 包 B 先注册，包 A 后注册；Run 应按包名字典序（A 在前）输出
+	// Register B before A; Run must still report A before B.
 	_ = reg.Register("pkg/zeta", func() error { return errors.New("z bug") })
 	_ = reg.Register("pkg/alpha", func() error { return errors.New("a bug") })
 
@@ -48,7 +48,7 @@ func TestInvariantMultiplePkgsOrdered(t *testing.T) {
 	if len(failures) != 2 {
 		t.Fatalf("Run() 应返回 2 个失败, 实际 %d", len(failures))
 	}
-	// 非 InvariantError 应被包装为带包名的错误
+	// Wrap non-InvariantError failures with their package attribution.
 	if !strings.HasPrefix(failures[0].Error(), "INVARIANT [pkg/alpha]: ") {
 		t.Fatalf("第一个失败应归属 pkg/alpha: %q", failures[0].Error())
 	}
@@ -57,7 +57,7 @@ func TestInvariantMultiplePkgsOrdered(t *testing.T) {
 	}
 }
 
-// TestInvariantRegisterValidation 验证非法注册参数被拒绝。
+// TestInvariantRegisterValidation rejects invalid registration parameters.
 func TestInvariantRegisterValidation(t *testing.T) {
 	reg := invariant.NewRegistry()
 
@@ -69,14 +69,14 @@ func TestInvariantRegisterValidation(t *testing.T) {
 	}
 }
 
-// TestInvariantDisableInProduction 验证关闭开关后 Run 不执行（生产零开销）。
+// TestInvariantDisableInProduction skips validation when disabled.
 func TestInvariantDisableInProduction(t *testing.T) {
 	reg := invariant.NewRegistry()
 	_ = reg.Register("pkg/session", func() error {
 		return errors.New("should not run when disabled")
 	})
 
-	// 记录原始开关状态，测试结束后恢复，避免影响其它用例
+	// Restore the original enabled state after the test to avoid affecting other cases.
 	original := invariant.IsEnabled()
 	defer invariant.SetEnabled(original)
 
@@ -88,14 +88,14 @@ func TestInvariantDisableInProduction(t *testing.T) {
 		t.Fatalf("关闭开关后 Run 应返回空, 实际 %d 个失败", len(failures))
 	}
 
-	// 重新开启后应恢复校验
+	// Re-enabling validation must restore checks.
 	invariant.SetEnabled(true)
 	if failures := reg.Run(); len(failures) != 1 {
 		t.Fatalf("重新开启后 Run 应返回 1 个失败, 实际 %d", len(failures))
 	}
 }
 
-// TestInvariantCheckerPanicIsolated 验证单个检查器 panic 不拖垮整体校验。
+// TestInvariantCheckerPanicIsolated prevents one checker panic from aborting all validation.
 func TestInvariantCheckerPanicIsolated(t *testing.T) {
 	reg := invariant.NewRegistry()
 	_ = reg.Register("pkg/panicky", func() error {
@@ -112,11 +112,11 @@ func TestInvariantCheckerPanicIsolated(t *testing.T) {
 	}
 }
 
-// TestInvariantMustSatisfy 验证 MustSatisfy 在违规时 panic、通过时不 panic。
+// TestInvariantMustSatisfy panics on a violation and returns normally on success.
 func TestInvariantMustSatisfy(t *testing.T) {
 	reg := invariant.NewRegistry()
 
-	// 通过场景
+	// Passing case.
 	_ = reg.Register("pkg/clean", func() error { return nil })
 	func() {
 		defer func() {
@@ -127,7 +127,7 @@ func TestInvariantMustSatisfy(t *testing.T) {
 		reg.MustSatisfy()
 	}()
 
-	// 违规场景
+	// Violation case.
 	_ = reg.Register("pkg/dirty", func() error { return errors.New("bad state") })
 	func() {
 		defer func() {

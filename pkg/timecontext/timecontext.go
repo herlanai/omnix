@@ -1,6 +1,6 @@
-// Package timecontext 复刻官方 context/time-context 的纯渲染部分：在准备请求时
-// 采样当前时间、时区，并给出距上一条模型可见消息经过的时长，让模型知道"现在是
-// 什么时候、已经过了多久"。
+// Package timecontext renders request-time context matching context/time-context.
+// It samples the current time and zone and reports elapsed time since the previous
+// model-visible message so the model knows the current time and intervening duration.
 package timecontext
 
 import (
@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-// FormatElapsed 把经过时间格式化为紧凑的整秒单位（d/h/m/s）。
+// FormatElapsed renders whole seconds using compact d/h/m/s units.
 func FormatElapsed(d time.Duration) string {
 	if d < 0 {
 		d = 0
@@ -34,8 +34,7 @@ func FormatElapsed(d time.Duration) string {
 	return strings.Join(parts, " ")
 }
 
-// Render 生成时钟上下文文本。loc 为 nil 时用 UTC；previous 为 nil 时经过时长
-// 记为 unavailable。
+// Render formats clock context; nil loc uses UTC and nil previous reports unavailable elapsed time.
 func Render(now time.Time, loc *time.Location, previous *time.Time) string {
 	if loc == nil {
 		loc = time.UTC

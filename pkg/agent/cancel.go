@@ -1,9 +1,7 @@
-// 本文件对应任务 M18：Agent Cancel 原因分类（5 类）。
-//
-// 对齐上游：packages/core/agent/Agent.ts
-//
-// Cancel 的取消原因通过 turn-stopping 事件记录为 "cancel:<cause>"；
-// 上层读取日志时用 ExtractCancelCause 还原分类，turn/end 以 aborted 关闭。
+// This file implements the five Agent cancellation categories (M18), following
+// upstream packages/core/agent/Agent.ts. Cancellation is recorded as
+// "cancel:<cause>" in turn-stopping; ExtractCancelCause recovers the category,
+// and turn/end closes the turn as aborted.
 package agent
 
 import (
@@ -12,17 +10,17 @@ import (
 	"github.com/herlanai/omnix/pkg/session"
 )
 
-// cancelReasonPrefix 是取消原因写入 turn-stopping 的固定前缀。
+// cancelReasonPrefix prefixes cancellation reasons in turn-stopping events.
 const cancelReasonPrefix = "cancel:"
 
-// RecordCancel 记录一次取消原因（写入 turn-stopping 事件）。
+// RecordCancel records the cancellation cause in a turn-stopping event.
 func RecordCancel(sl *session.SessionLog, cause CancelCause) error {
 	_, err := sl.Append(session.TurnStoppingData{Reason: cancelReasonPrefix + string(cause)})
 	return err
 }
 
-// ExtractCancelCause 从事件日志中提取最后一次取消原因分类。
-// 返回 (cause, true) 表示存在取消记录；否则 (cause, false)。
+// ExtractCancelCause returns the last cancellation cause in the event log.
+// The boolean reports whether a cancellation record was found.
 func ExtractCancelCause(events []session.SessionEvent) (CancelCause, bool) {
 	var found CancelCause
 	ok := false
@@ -40,7 +38,7 @@ func ExtractCancelCause(events []session.SessionEvent) (CancelCause, bool) {
 	return found, ok
 }
 
-// AllCancelCauses 返回全部 5 种取消原因（测试与校验用）。
+// AllCancelCauses returns all five causes for validation and tests.
 func AllCancelCauses() []CancelCause {
 	return []CancelCause{CancelUser, CancelParent, CancelHook, CancelDisposed, CancelLegacy}
 }

@@ -30,12 +30,12 @@ layout: hextra-home
 
 <div class="hx-mt-8"></div>
 
-<!-- ========== 架构图（带动效数据流） ========== -->
+<!-- Architecture diagram with animated data flow. -->
 {{< arch-diagram >}}
 
 <div class="hx-mt-8"></div>
 
-<!-- ========== 玻璃特性卡片 ========== -->
+<!-- Glass feature cards. -->
 ## omnix 能给你什么
 
 Agent 内核由三大支柱构成。每一项都是 **Capability Seam（能力接缝）**：服务定义 + 可替换的 Provider，

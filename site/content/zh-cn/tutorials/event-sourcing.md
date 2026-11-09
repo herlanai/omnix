@@ -26,7 +26,7 @@ sl := session.NewSessionLog(brand.NewSessionID("demo"))
 sl.Append(session.UserMessageData{Content: "你好"})
 sl.Append(session.AssistantMessageData{Content: "你好，我是 omnix。"})
 
-evs := sl.Events() // 读出这条"不可变事实日志"
+evs := sl.Events() // Read the immutable event log.
 ```
 
 关键点：

@@ -17,7 +17,7 @@ func TestRepairOrphanTurnFull(t *testing.T) {
 			Data: session.ToolCallData{CallID: brand.NewToolCallID("c1"), Tool: "bash"}},
 	}
 	n := repairOrphanTurn(&events)
-	// 应补 tool/result + step/end + turn/end 共 3 条。
+	// Repair should append tool/result, step/end, and turn/end: three events.
 	if n != 3 {
 		t.Fatalf("repaired = %d want 3", n)
 	}

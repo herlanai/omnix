@@ -1,7 +1,5 @@
-// 本文件验证任务 S04：Session Query + FTS5 搜索。
-//
-// 覆盖：标题前缀/创建时间范围/包含关键词三元过滤准确；FTS 内容搜索定位会话；
-// 搜索结果与摘要字段正确。
+// S04 session-query and FTS5 tests cover combined title/time/keyword filtering, content-based
+// session lookup, and accurate result summaries.
 package tests
 
 import (
@@ -15,7 +13,8 @@ import (
 	"github.com/herlanai/omnix/pkg/sessionquery"
 )
 
-// seedSessions 往 sqlite 写入 3 个带标题与会话的会话（固定创建时间便于范围过滤）。
+// seedSessions writes three titled sessions to SQLite with fixed creation times for range
+// filtering.
 func seedSessions(t *testing.T, ctx context.Context, st *sqlstore.Store) {
 	t.Helper()
 	base := time.Now().Add(-24 * time.Hour)
@@ -31,7 +30,7 @@ func seedSessions(t *testing.T, ctx context.Context, st *sqlstore.Store) {
 	}
 	for _, sp := range specs {
 		sid := brand.NewSessionID(sp.id)
-		// 用户消息（seq=1，时间对应当前小时的起点）。
+		// A user message at sequence 1 uses the beginning of the selected hour.
 		msgEv := session.SessionEvent{
 			Seq: 1, Time: base.Add(time.Duration(sp.hour) * time.Hour),
 			Type: session.EventUserMessage, Data: session.UserMessageData{Content: sp.msg},
@@ -49,7 +48,7 @@ func seedSessions(t *testing.T, ctx context.Context, st *sqlstore.Store) {
 	}
 }
 
-// TestSessionQueryTripleFilter 验证标题前缀 + 创建时间范围 + Limit 三元过滤。
+// TestSessionQueryTripleFilter combines title prefix, creation-time range, and limit.
 func TestSessionQueryTripleFilter(t *testing.T) {
 	ctx := context.Background()
 	st, err := sqlstore.Open(":memory:")
@@ -63,27 +62,27 @@ func TestSessionQueryTripleFilter(t *testing.T) {
 	from := time.Now().Add(-24 * time.Hour).Add(5 * time.Hour)
 	to := time.Now().Add(-24 * time.Hour).Add(11 * time.Hour)
 
-	// 标题前缀过滤：应只命中 s1（数据库…）与 s3（部署…），s2 标题"缓存…"不含"数据"。
+	// Filter by the data-related title prefix, excluding the cache-titled session.
 	list := mustList(t, q, sessionquery.ListRequest{TitlePrefix: "数据"})
 	if len(list) != 1 || list[0].ID != "s1" {
 		t.Fatalf("标题前缀『数据』应仅命中 s1，实际 %+v", list)
 	}
 
-	// 创建时间范围 [5h,11h)：命中 s2(6h) 与 s3(10h)，排除 s1(2h)。
+	// The range [5h,11h) includes s2 at 6h and s3 at 10h, excluding s1 at 2h.
 	list2 := mustList(t, q, sessionquery.ListRequest{CreatedFrom: &from, CreatedTo: &to})
 	ids := idsOf(list2)
 	if len(ids) != 2 || !has(ids, "s2") || !has(ids, "s3") {
 		t.Fatalf("时间范围应命中 s2/s3，实际 %v", ids)
 	}
 
-	// 三元组合 + Limit=1（按更新时间倒序，最新为 s3）。
+	// Combine filters with Limit=1; descending update order selects s3.
 	list3 := mustList(t, q, sessionquery.ListRequest{TitlePrefix: "", Limit: 1})
 	if len(list3) != 1 || list3[0].ID != "s3" {
 		t.Fatalf("Limit=1 且倒序应命中最新 s3，实际 %+v", list3)
 	}
 }
 
-// TestSessionQueryContentSearch 验证 FTS5 内容关键词定位会话。
+// TestSessionQueryContentSearch locates sessions through FTS5 keywords.
 func TestSessionQueryContentSearch(t *testing.T) {
 	ctx := context.Background()
 	st, err := sqlstore.Open(":memory:")
@@ -97,19 +96,19 @@ func TestSessionQueryContentSearch(t *testing.T) {
 	if !st.FTSEnabled() {
 		t.Skip("当前驱动不支持 FTS5")
 	}
-	// 内容含"PostgreSQL" → s1。
+	// PostgreSQL in message content matches s1.
 	res := mustSearch(t, q, sessionquery.SearchRequest{Keyword: "PostgreSQL"})
 	if len(res) != 1 || res[0].ID != "s1" {
 		t.Fatalf("关键词 PostgreSQL 应命中 s1，实际 %+v", res)
 	}
-	// 标题含"缓存" → s2（标题命中路径）。
+	// The cache keyword in the title matches s2.
 	res2 := mustSearch(t, q, sessionquery.SearchRequest{Keyword: "缓存命中率"})
 	if len(res2) != 1 || res2[0].ID != "s2" {
 		t.Fatalf("标题含『缓存命中率』应命中 s2，实际 %+v", res2)
 	}
 }
 
-// TestSessionQueryEmptyKeyword 验证空关键词返回空。
+// TestSessionQueryEmptyKeyword returns no results for an empty query.
 func TestSessionQueryEmptyKeyword(t *testing.T) {
 	ctx := context.Background()
 	st, _ := sqlstore.Open(":memory:")
@@ -121,9 +120,7 @@ func TestSessionQueryEmptyKeyword(t *testing.T) {
 	}
 }
 
-// ============================================================================
-// 工具
-// ============================================================================
+// Helpers.
 
 func mustList(t *testing.T, q *sessionquery.QueryService, req sessionquery.ListRequest) []sessionquery.SessionSummary {
 	t.Helper()

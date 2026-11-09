@@ -1,9 +1,6 @@
-// Package tests 的 N06（阶段 5 防御层）验收测试。
-//
-// 覆盖：
-//   - internal/lint cache_safety：AST 扫描捕获 4 类反模式（time.Now/os.Getwd/rand/无序 map）
-//   - 干净包 0 violations
-//   - compileToJSONSchema 输出确定（两次 Marshal 逐字节相同 + required 字典序）
+// N06 tests cover AST detection of timestamps, working-directory dependencies, randomness, and
+// direct map serialization; clean packages with no violations; and deterministic JSON Schema
+// output with sorted required fields.
 package tests
 
 import (
@@ -31,7 +28,7 @@ const cleanSource = `package p
 func f() string { return "static" }
 `
 
-// TestN06LintCatchesDynamicPatterns 验证扫描捕获 time.Now / os.Getwd。
+// TestN06LintCatchesDynamicPatterns detects time.Now and os.Getwd.
 func TestN06LintCatchesDynamicPatterns(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "a.go"), []byte(badSource), 0o644); err != nil {
@@ -46,7 +43,7 @@ func TestN06LintCatchesDynamicPatterns(t *testing.T) {
 	}
 }
 
-// TestN06LintCatchesRand 验证扫描捕获 math/rand。
+// TestN06LintCatchesRand detects math/rand.
 func TestN06LintCatchesRand(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "r.go"), []byte(badRand), 0o644); err != nil {
@@ -58,7 +55,7 @@ func TestN06LintCatchesRand(t *testing.T) {
 	}
 }
 
-// TestN06LintCleanPackage 验证干净包 0 violations。
+// TestN06LintCleanPackage reports no violations for clean code.
 func TestN06LintCleanPackage(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "clean.go"), []byte(cleanSource), 0o644); err != nil {
@@ -70,9 +67,9 @@ func TestN06LintCleanPackage(t *testing.T) {
 	}
 }
 
-// TestN06SchemaDeterministicOrder 验证 compileToJSONSchema 两次 Marshal 逐字节相同（字典序）。
+// TestN06SchemaDeterministicOrder verifies byte-identical JSON Schema marshaling.
 func TestN06SchemaDeterministicOrder(t *testing.T) {
-	// 构造一个含属性/required 的 schema（无序构造 Properties/Required）。
+	// Build a schema with deliberately unordered Properties and Required entries.
 	schema := &tools.JsonSchemaNode{
 		Type: tools.TypeObject,
 		Properties: map[string]*tools.JsonSchemaNode{
@@ -92,7 +89,7 @@ func TestN06SchemaDeterministicOrder(t *testing.T) {
 			t.Fatalf("第 %d 次 Marshal 不一致（schema 顺序随机）", i)
 		}
 	}
-	// properties/required 应字典序（a 在 c 前）。
+	// Properties and required fields must be lexical: a precedes c.
 	s := string(b1)
 	if posOfStr(s, "\"a\"") > posOfStr(s, "\"c\"") {
 		t.Fatalf("schema 应按字典序: %s", s)

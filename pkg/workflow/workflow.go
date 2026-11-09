@@ -1,14 +1,8 @@
-// Package workflow 提供工作流引擎（任务 S12：Workflow Engine + tool-workflow）。
-//
-// 对齐上游：packages/workflow/workflow + tool-workflow
-//
-// 设计要点：
-//   - 以「脚本全局函数」方式组织编排原语：Pipeline(串行) / Parallel(并行) /
-//     Agent(子代理步骤)，均为顶层函数，业务侧直接调用即可拼装工作流；
-//   - Step 是可执行的最小单元（运行函数 + 名称）；Workflow 持有逐步序列；
-//   - Run：Pipeline 串行执行、Parallel 并发执行（goroutine + errgroup 等价语义），
-//     收集各步输出；取消（ctx cancel）会级联取消正在进行的步骤；
-//   - WorkflowResult 聚合各步输出与取消标志，供上层对比/汇总。
+// Package workflow provides workflow orchestration and tool-workflow (S12),
+// matching workflow/workflow upstream. Top-level Pipeline, Parallel, and Agent
+// functions compose named executable Steps. Pipelines run serially, while parallel
+// workflows run concurrent goroutines and aggregate ordered outputs. Context
+// cancellation cascades to active steps; Result includes outputs and cancellation.
 package workflow
 
 import (
@@ -17,27 +11,25 @@ import (
 	"sync"
 )
 
-// ============================================================================
-// Step 与 Result
-// ============================================================================
+// Steps and results.
 
-// StepRunFunc 是单步执行函数（ctx 取消时应尽快返回）。
+// StepRunFunc executes a step and should return promptly when ctx is canceled.
 type StepRunFunc func(ctx context.Context) (string, error)
 
-// Step 是最小工作流单元。
+// Step is the smallest executable workflow unit.
 type Step struct {
-	Name string     // 步骤名（诊断/汇总用）
+	Name string // Step name for diagnostics and summaries.
 	Run  StepRunFunc
 }
 
-// Result 是一个工作流的运行结果。
+// Result contains a workflow's output.
 type Result struct {
 	Name      string   `json:"name"`
-	Outputs   []string `json:"outputs"`   // 各步输出（保序）
-	Cancelled bool     `json:"cancelled"` // 是否被取消
+	Outputs   []string `json:"outputs"`   // Step outputs in order.
+	Cancelled bool     `json:"cancelled"` // Whether execution was canceled.
 }
 
-// Errors 返回本次运行产生的首个错误（无则 nil）。
+// Errors returns the first execution error, or nil.
 func (r *Result) Errors() error {
 	for _, o := range r.Outputs {
 		if s, ok := unwrapErr(o); ok {
@@ -47,46 +39,44 @@ func (r *Result) Errors() error {
 	return nil
 }
 
-// unwrapErr 把输出中的错误占位还原为 error。
+// unwrapErr recovers an error placeholder from output.
 func unwrapErr(o string) (error, bool) {
-	return nil, false // 输出为文本，无内嵌错误
+	return nil, false // Text output contains no embedded error.
 }
 
 // ============================================================================
 // Workflow
 // ============================================================================
 
-// Mode 是工作流的执行模式。
+// Mode selects workflow execution mode.
 type Mode string
 
 const (
-	ModePipeline Mode = "pipeline" // 串行
-	ModeParallel Mode = "parallel" // 并行
+	ModePipeline Mode = "pipeline" // Sequential execution.
+	ModeParallel Mode = "parallel" // Parallel execution.
 )
 
-// Workflow 是一组 Step 的组合（串行或并行）。
+// Workflow combines steps sequentially or in parallel.
 type Workflow struct {
-	Name   string
-	Mode   Mode
-	Steps  []*Step
+	Name  string
+	Mode  Mode
+	Steps []*Step
 }
 
-// ============================================================================
-// 全局编排原语
-// ============================================================================
+// Top-level orchestration primitives.
 
-// Pipeline 构造串行工作流（逐步依序执行）。
+// Pipeline creates a workflow that executes steps in order.
 func Pipeline(name string, steps ...*Step) *Workflow {
 	return &Workflow{Name: name, Mode: ModePipeline, Steps: steps}
 }
 
-// Parallel 构造并行工作流（各步并发执行）。
+// Parallel creates a workflow that executes steps concurrently.
 func Parallel(name string, steps ...*Step) *Workflow {
 	return &Workflow{Name: name, Mode: ModeParallel, Steps: steps}
 }
 
-// Agent 构造一个子代理步骤（包装 subagent in-process 调用；backendName 可为
-// "in-process"/"acp"/"fork-copy"）。
+// Agent creates a child-agent step using the selected in-process, acp, or
+// fork-copy backend.
 func Agent(name, backendName, input string, spawn SpawnAgentFunc) *Step {
 	return &Step{
 		Name: name,
@@ -96,7 +86,7 @@ func Agent(name, backendName, input string, spawn SpawnAgentFunc) *Step {
 	}
 }
 
-// Seq 把子工作流包装成单步（用于并行编排多个子工作流做聚合）。
+// Seq wraps a nested workflow as one step for aggregation in a larger workflow.
 func Seq(w *Workflow) *Step {
 	return &Step{
 		Name: w.Name,
@@ -117,14 +107,14 @@ func Seq(w *Workflow) *Step {
 	}
 }
 
-// SpawnAgentFunc 由上层注入：按后端名运行一个子代理并返回输出。
+// SpawnAgentFunc is injected to run a child on a named backend and return output.
 type SpawnAgentFunc func(ctx context.Context, backendName, input string) (string, error)
 
 // ============================================================================
 // Run
 // ============================================================================
 
-// Run 执行工作流，返回聚合结果。ctx 取消会级联终止。
+// Run executes the workflow and aggregates results, cascading ctx cancellation.
 func (w *Workflow) Run(ctx context.Context) (*Result, error) {
 	res := &Result{Name: w.Name}
 	switch w.Mode {
@@ -135,7 +125,7 @@ func (w *Workflow) Run(ctx context.Context) (*Result, error) {
 	}
 }
 
-// runPipeline 串行执行逐步。
+// runPipeline executes steps sequentially.
 func (w *Workflow) runPipeline(ctx context.Context, res *Result) (*Result, error) {
 	for _, s := range w.Steps {
 		if err := ctx.Err(); err != nil {
@@ -148,7 +138,7 @@ func (w *Workflow) runPipeline(ctx context.Context, res *Result) (*Result, error
 		} else {
 			res.Outputs = append(res.Outputs, fmt.Sprintf("[%s:error %v]", s.Name, err))
 		}
-		// 单步失败即中止整条串行流水线（短路）。
+		// A failed step short-circuits the sequential pipeline.
 		if err != nil {
 			return res, err
 		}
@@ -156,7 +146,7 @@ func (w *Workflow) runPipeline(ctx context.Context, res *Result) (*Result, error
 	return res, nil
 }
 
-// runParallel 并行执行各步并汇总（保序）。
+// runParallel executes steps concurrently and preserves output order.
 func (w *Workflow) runParallel(ctx context.Context, res *Result) (*Result, error) {
 	outputs := make([]string, len(w.Steps))
 	var wg sync.WaitGroup

@@ -136,7 +136,7 @@ type LLMAdapter interface {
 任何模型只要实现这 3 个方法，就能被 Agent 的 LLM 层调用。接一个**OpenAI 兼容 provider** 也不难（OpenAI function calling 风格 + SSE），一般流程是：组装请求体 → 调 `/v1/chat/completions?stream=true` → 解析 SSE `data` 映射为 `ChunkText / ChunkToolCall / ChunkDone` → 返回 `Usage`。然后把它注入 Agent：
 
 ```go
-a := agent.NewAgent(id, sl, sys, pipeline, myProvider) // myProvider 换成你的实现
+a := agent.NewAgent(id, sl, sys, pipeline, myProvider) // Replace myProvider with your implementation.
 ```
 
 **诚实提示**：本项目定位参考实现/教学，内置仅 DeepSeek 一个适配器，OpenAI/Claude 需你自行实现 provider 且未经社区验证。**要"多模型可用"请用 Eino / LangChain / 官方 SDK**；若想**学习"如何写一个 LLM provider 接缝"**，对照 `pkg/llm/provider_deepseek/deepseek.go` + `LLMAdapter` 实现一个 OpenAI provider 会是很好的练手。

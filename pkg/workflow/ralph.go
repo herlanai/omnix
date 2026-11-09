@@ -1,6 +1,7 @@
-// ralph.go 复刻官方 workflow/tool-ralph 的纯编排：围绕一个固定目标，每轮让一个
-// 全新子代理返回结构化报告，continue 则携带有界 handoff 进入下一轮，complete
-// 成功收尾、blocked 需人工、达到 maxRounds 记为 budget-limited。
+// Ralph orchestration matches workflow/tool-ralph. Each round starts a fresh
+// child agent for a fixed goal and receives a structured report. Continue carries
+// a bounded handoff to the next round; complete succeeds, blocked needs human
+// input, and exhausting maxRounds produces budget-limited.
 package workflow
 
 import (
@@ -9,7 +10,7 @@ import (
 	"errors"
 )
 
-// RoundStatus 是单轮状态。
+// RoundStatus identifies a round's outcome.
 type RoundStatus string
 
 const (
@@ -18,7 +19,7 @@ const (
 	StatusBlocked  RoundStatus = "blocked"
 )
 
-// RoundReport 是单轮子代理返回的结构化报告。
+// RoundReport is a child agent's structured report.
 type RoundReport struct {
 	Status    RoundStatus `json:"status"`
 	Summary   string      `json:"summary"`
@@ -27,7 +28,7 @@ type RoundReport struct {
 	Blocker   string      `json:"blocker"`
 }
 
-// RunStatus 是整个 Ralph 循环的收尾状态。
+// RunStatus identifies the final Ralph-loop outcome.
 type RunStatus string
 
 const (
@@ -36,20 +37,20 @@ const (
 	RunBudgetLimited RunStatus = "budget-limited"
 )
 
-// RalphResult 是循环结果。
+// RalphResult contains the loop result.
 type RalphResult struct {
 	Status RunStatus
 	Rounds int
 	Final  RoundReport
 }
 
-// RoundRunner 运行一轮：传入目标与上一轮 handoff（首轮为空），返回本轮报告。
+// RoundRunner receives the goal and previous handoff (empty initially) and returns a round report.
 type RoundRunner func(ctx context.Context, objective, priorHandoff string) (RoundReport, error)
 
-// DefaultRalphMaxRounds 是默认轮数上限。
+// DefaultRalphMaxRounds is the default round limit.
 const DefaultRalphMaxRounds = 256
 
-// ValidateReport 校验报告与状态是否自洽。
+// ValidateReport checks report consistency with its status.
 func ValidateReport(r RoundReport) error {
 	switch r.Status {
 	case StatusComplete:
@@ -70,7 +71,8 @@ func ValidateReport(r RoundReport) error {
 	return nil
 }
 
-// RunRalph 执行 Ralph 循环。maxRounds<=0 用默认值；maxHandoffChars>0 时校验 handoff 长度。
+// RunRalph uses default rounds when maxRounds is nonpositive and enforces handoff
+// length when maxHandoffChars is positive.
 func RunRalph(ctx context.Context, objective string, runner RoundRunner, maxRounds, maxHandoffChars int) (*RalphResult, error) {
 	if maxRounds <= 0 {
 		maxRounds = DefaultRalphMaxRounds

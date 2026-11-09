@@ -1,4 +1,4 @@
-// 本文件对应任务 M09：SystemPrompt 组装 + Section 注册表。
+// M09 system-prompt assembly and section-registry tests.
 package tests
 
 import (
@@ -10,11 +10,12 @@ import (
 	"github.com/herlanai/omnix/pkg/tools"
 )
 
-// TestSyspromptSectionOrdering 验证 persona → policy → runtime-context → plan:policy → tools 的顺序。
+// TestSyspromptSectionOrdering verifies persona, policy, runtime-context, plan:policy, and tools
+// ordering.
 func TestSyspromptSectionOrdering(t *testing.T) {
 	a := sysprompt.New()
 
-	// 故意乱序注册，验证按 order 组装
+	// Register out of order to verify sorting by section order.
 	a.Register("tools", sysprompt.SectionOrderToolsSchema, "TOOLS_SECTION")
 	a.Register("persona", sysprompt.SectionOrderPersona, "PERSONA_SECTION")
 	a.Register("plan_policy", sysprompt.SectionOrderPlanPolicy, "PLAN_POLICY_SECTION")
@@ -23,7 +24,7 @@ func TestSyspromptSectionOrdering(t *testing.T) {
 
 	out := a.Assemble()
 
-	// 各 section 应严格按 order 顺序出现
+	// Sections must appear strictly in configured order.
 	idxPersona := strings.Index(out, "PERSONA_SECTION")
 	idxPolicy := strings.Index(out, "POLICY_SECTION")
 	idxCtx := strings.Index(out, "RUNTIME_CTX_SECTION")
@@ -36,7 +37,7 @@ func TestSyspromptSectionOrdering(t *testing.T) {
 	}
 }
 
-// TestSyspromptRegisterOverwrite 验证同名 Section 覆盖 + Unregister 移除。
+// TestSyspromptRegisterOverwrite verifies replacement by name and removal by Unregister.
 func TestSyspromptRegisterOverwrite(t *testing.T) {
 	a := sysprompt.New()
 	a.Register("policy", sysprompt.SectionOrderPolicy, "v1")
@@ -56,7 +57,7 @@ func TestSyspromptRegisterOverwrite(t *testing.T) {
 	}
 }
 
-// TestSyspromptOrderConstants 验证 order 常量值与上游一致（写死不可被运行时覆盖）。
+// TestSyspromptOrderConstants checks fixed order constants against upstream values.
 func TestSyspromptOrderConstants(t *testing.T) {
 	if sysprompt.SectionOrderPersona != 100 {
 		t.Fatal("persona order 应为 100")
@@ -75,9 +76,10 @@ func TestSyspromptOrderConstants(t *testing.T) {
 	}
 }
 
-// TestSyspromptToolsSchemaInjection 验证 tools schema 注入：确定性 + 字典序 + 参数 schema 合法。
+// TestSyspromptToolsSchemaInjection verifies deterministic lexical tool ordering and valid
+// parameter schemas.
 func TestSyspromptToolsSchemaInjection(t *testing.T) {
-	// 两个工具，故意乱序传入
+	// Supply two tools in deliberately reversed order.
 	toolList := []*tools.Tool{
 		{Name: "zebra_tool", Description: "z tool", Schema: mustCompile(t, `{"type":"object","properties":{"z":{"type":"string"}}}`)},
 		{Name: "alpha_tool", Description: "a tool", Schema: mustCompile(t, `{"type":"object","properties":{"a":{"type":"integer"}}}`)},
@@ -89,20 +91,19 @@ func TestSyspromptToolsSchemaInjection(t *testing.T) {
 	}
 	text2, _ := sysprompt.ToolsSectionText(toolList)
 
-	// 确定性：两次调用一致
+	// Repeated calls must return identical output.
 	if text1 != text2 {
 		t.Fatal("tools schema 输出不确定")
 	}
 
-	// 按 name 字典序（alpha_tool 在前）
+	// Lexical name ordering places alpha_tool first.
 	idxAlpha := strings.Index(text1, "alpha_tool")
 	idxZebra := strings.Index(text1, "zebra_tool")
 	if !(idxAlpha > 0 && idxZebra > idxAlpha) {
 		t.Fatalf("工具应按字典序: %q", text1)
 	}
 
-	// 参数 schema 是合法 JSON
-	// 提取 JSON 数组部分（第一行是标题，其余是 JSON）
+	// Extract the JSON array after the heading and verify valid parameter schemas.
 	jsonStart := strings.Index(text1, "[")
 	if jsonStart < 0 {
 		t.Fatal("tools schema 应包含 JSON 数组")
@@ -116,7 +117,7 @@ func TestSyspromptToolsSchemaInjection(t *testing.T) {
 	}
 }
 
-// mustCompile 便捷编译 schema，失败即 panic。
+// mustCompile compiles a schema or panics on failure.
 func mustCompile(t *testing.T, raw string) *tools.JsonSchemaNode {
 	t.Helper()
 	node, err := tools.Compile([]byte(raw))
@@ -126,7 +127,7 @@ func mustCompile(t *testing.T, raw string) *tools.JsonSchemaNode {
 	return node
 }
 
-// TestSyspromptEmpty 验证空组装器返回空串。
+// TestSyspromptEmpty returns an empty string for an empty assembler.
 func TestSyspromptEmpty(t *testing.T) {
 	a := sysprompt.New()
 	if a.Assemble() != "" {

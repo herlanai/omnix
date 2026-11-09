@@ -1,4 +1,4 @@
-<!-- ========== 架构图：玻璃节点 + 数据流动画 ========== -->
+<!-- Architecture diagram with glass nodes and animated data flow. -->
 <div class="omnix-arch">
   <svg class="omnix-arch-svg" viewBox="0 0 985 440" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="omnix architecture: event sourcing, fold projection, agent loop, tools, LLM">
     <defs>
@@ -17,7 +17,7 @@
       </linearGradient>
     </defs>
 
-    <!-- 连接线 -->
+    <!-- Connecting paths. -->
     <g stroke="rgba(124,147,255,0.45)" stroke-width="2" stroke-linecap="round">
       <!-- User -> Session -->
       <path id="omnixEdge1" d="M150 40 C 150 70, 150 80, 150 110"/>
@@ -33,11 +33,11 @@
       <path id="omnixEdge6" d="M695 235 C 706 235, 715 210, 730 190"/>
       <!-- Tools -> LLM -->
       <path id="omnixEdge7" d="M840 160 C 840 200, 840 260, 838 300"/>
-      <!-- LLM -> Agent Loop (返回) -->
+      <!-- LLM to Agent Loop return path. -->
       <path id="omnixEdge8" d="M840 330 C 700 380, 640 320, 620 285"/>
     </g>
 
-    <!-- 数据流动点 -->
+    <!-- Animated data-flow dots. -->
     <g>
       <circle r="4" fill="#22d3ee"><animateMotion dur="2.4s" repeatCount="indefinite"><mpath href="#omnixEdge1"/></animateMotion></circle>
       <circle r="4" fill="#7c93ff"><animateMotion dur="2.4s" repeatCount="indefinite"><mpath href="#omnixEdge2"/></animateMotion></circle>
@@ -49,7 +49,7 @@
       <circle r="4" fill="#f472b6"><animateMotion dur="2.8s" repeatCount="indefinite" begin="0.4s"><mpath href="#omnixEdge8"/></animateMotion></circle>
     </g>
 
-    <!-- 节点 -->
+    <!-- Nodes. -->
     <!-- User -->
     <g class="omnix-node">
       <rect x="60" y="16" width="180" height="52" rx="26" fill="url(#omnixGlass)" stroke="rgba(255,255,255,0.28)" stroke-width="1.5"/>
@@ -63,7 +63,7 @@
       <text x="150" y="176" text-anchor="middle" fill="#9aa3c7" font-size="13">append-only log · replayable</text>
     </g>
 
-    <!-- Persistence（事件溯源落地点） -->
+    <!-- Persistence: durable storage for event sourcing. -->
     <g class="omnix-node omnix-node-3">
       <rect x="285" y="176" width="150" height="52" rx="26" fill="url(#omnixGlass)" stroke="rgba(167,139,250,0.5)" stroke-width="1.5"/>
       <text x="360" y="200" text-anchor="middle" fill="#e6ecff" font-size="14" font-weight="600">Persistence</text>

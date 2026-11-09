@@ -1,9 +1,6 @@
-// Package tests 的 ConsumedWork（consumed.go）验收测试。
-//
-// 覆盖：
-//   - 进入 step 的 turn 被结算为 End
-//   - claim 输入后 blocked/error 的 turn 被结算；completed 的 no-op 不结算
-//   - canceled 且无插入 → DroppedUnrun；canceled 但有插入（替换）→ 不丢弃
+// ConsumedWork tests cover settling turns that enter a step, settling blocked/error turns after
+// claiming input while excluding completed no-ops, and marking canceled turns without insertion as
+// DroppedUnrun while retaining canceled turns with replacement input.
 package tests
 
 import (
@@ -13,7 +10,7 @@ import (
 	"github.com/herlanai/omnix/pkg/session"
 )
 
-// mkEvent 构造一条带类型化 data 的事件。
+// mkEvent constructs an event with typed data.
 func mkEvent(seq uint64, t session.EventType, data session.EventData) session.SessionEvent {
 	return session.SessionEvent{Seq: seq, Type: t, Data: data}
 }

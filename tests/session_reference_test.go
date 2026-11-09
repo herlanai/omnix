@@ -1,10 +1,6 @@
-// Package tests 的会话引用（M17）验收测试。
-//
-// 覆盖：
-//   - Mention 语法解析（@session/<id> 与 #<path/file>）
-//   - PreparedReferencedMessage：剥离 mention + 聚合参考快照
-//   - 稳定错误码：SESSION_NOT_FOUND / FILE_NOT_FOUND / FILE_OUT_OF_WORKSPACE / 自引用 / 超限
-//   - 写入 user/message(source=reference, refs) 的审计语义
+// M17 session-reference tests cover @session/<id> and #<path/file> parsing, mention removal and
+// snapshot aggregation, stable missing/out-of-workspace/self-reference/limit errors, and
+// user/message reference audit data.
 package tests
 
 import (
@@ -17,7 +13,7 @@ import (
 	"github.com/herlanai/omnix/pkg/session"
 )
 
-// stubSessionResolver 组合解析器：会话走 stub map，文件委托给工作区 resolver。
+// stubSessionResolver resolves sessions from a map and delegates files to a workspace resolver.
 type stubSessionResolver struct {
 	sessions map[string]string
 	fs       *session.WorkspaceFileResolver
@@ -36,7 +32,7 @@ func (r *stubSessionResolver) ResolveFile(p string) (string, error) {
 
 func (r *stubSessionResolver) WorkspaceRoot() string { return r.fs.WorkspaceRoot() }
 
-// newTestResolver 构造指向临时工作区的测试解析器。
+// newTestResolver creates a resolver rooted at a temporary workspace.
 func newTestResolver(t *testing.T, sessions map[string]string) *stubSessionResolver {
 	t.Helper()
 	root := t.TempDir()
@@ -46,14 +42,14 @@ func newTestResolver(t *testing.T, sessions map[string]string) *stubSessionResol
 	}
 }
 
-// TestSessionReferenceMentionParsing 验证 mention 语法的正确解析。
+// TestSessionReferenceMentionParsing verifies mention syntax.
 func TestSessionReferenceMentionParsing(t *testing.T) {
 	text := `请对比 @session/abc-123 与 @session/xyz_9 的实现，并参考 #src/main.go 与 #docs/readme.md`
 	ms := session.ParseMentions(text)
 	if len(ms) != 4 {
 		t.Fatalf("应解析 4 个 mention, 实际 %d: %+v", len(ms), ms)
 	}
-	// 顺序校验（会话 + 文件混合，按原文位置）
+	// Mixed session and file mentions must retain source-text order.
 	want := []session.Mention{
 		{Kind: session.MentionSession, Value: "abc-123"},
 		{Kind: session.MentionSession, Value: "xyz_9"},
@@ -67,7 +63,7 @@ func TestSessionReferenceMentionParsing(t *testing.T) {
 	}
 }
 
-// TestSessionReferencePrepareAggregates 验证 3 会话 + 文件 → 聚合上下文正确。
+// TestSessionReferencePrepareAggregates combines three sessions and a file correctly.
 func TestSessionReferencePrepareAggregates(t *testing.T) {
 	root := t.TempDir()
 	mainGo := filepath.Join(root, "src", "main.go")
@@ -96,26 +92,26 @@ func TestSessionReferencePrepareAggregates(t *testing.T) {
 		t.Fatalf("Prepare 失败: %v", err)
 	}
 
-	// 剥离 mention 后剩余可读内容
+	// Readable text remains after mentions are removed.
 	if strings.Contains(prepared.Content, "@session/") {
 		t.Errorf("Content 仍含会话 mention: %q", prepared.Content)
 	}
 	if strings.Contains(prepared.Content, "#src/main.go") {
 		t.Errorf("Content 仍含文件 mention: %q", prepared.Content)
 	}
-	// 聚合上下文包含每个引用快照
+	// The aggregate context includes every referenced snapshot.
 	for _, want := range []string{"session-1 snapshot", "session-2 snapshot", "session-3 snapshot", "file \"src/main.go\""} {
 		if !strings.Contains(prepared.AdditionalContext, want) {
 			t.Errorf("additionalContext 缺少 %q\n上下文:\n%s", want, prepared.AdditionalContext)
 		}
 	}
-	// 引用审计记录齐全
+	// All references must appear in the audit record.
 	if len(prepared.References) != 4 {
 		t.Fatalf("References 应有 4 条, 实际 %d", len(prepared.References))
 	}
 }
 
-// TestSessionReferenceSelfReferenceRejected 验证自引用返回 SELF_REFERENCE。
+// TestSessionReferenceSelfReferenceRejected returns SELF_REFERENCE.
 func TestSessionReferenceSelfReferenceRejected(t *testing.T) {
 	res := newTestResolver(t, map[string]string{})
 	_, err := session.Prepare(session.PrepareRequest{
@@ -128,13 +124,13 @@ func TestSessionReferenceSelfReferenceRejected(t *testing.T) {
 	}
 }
 
-// TestSessionReferenceClassificationErrors 验证会话/文件不存在的分类错误码。
+// TestSessionReferenceClassificationErrors distinguishes missing sessions and files.
 func TestSessionReferenceClassificationErrors(t *testing.T) {
 	root := t.TempDir()
-	res := newTestResolver(t, map[string]string{}) // 无任何会话
+	res := newTestResolver(t, map[string]string{}) // No sessions registered.
 	res.fs.Root = root
 
-	// 会话不存在 → SESSION_NOT_FOUND
+	// A missing session returns SESSION_NOT_FOUND.
 	_, err := session.Prepare(session.PrepareRequest{
 		Text:     `请读 @session/ghost`,
 		Resolver: res,
@@ -143,7 +139,7 @@ func TestSessionReferenceClassificationErrors(t *testing.T) {
 		t.Fatalf("应返回 SESSION_NOT_FOUND, 实际: %v", err)
 	}
 
-	// 文件不存在 → FILE_NOT_FOUND
+	// A missing file returns FILE_NOT_FOUND.
 	_, err = session.Prepare(session.PrepareRequest{
 		Text:     `见 #no/such/file.go`,
 		Resolver: res,
@@ -152,7 +148,7 @@ func TestSessionReferenceClassificationErrors(t *testing.T) {
 		t.Fatalf("应返回 FILE_NOT_FOUND, 实际: %v", err)
 	}
 
-	// 越界文件（相对路径 ../ 指向工作区外）→ FILE_OUT_OF_WORKSPACE
+	// A ../ path outside the workspace returns FILE_OUT_OF_WORKSPACE.
 	_, err = session.Prepare(session.PrepareRequest{
 		Text:     `读 #../outside.txt`,
 		Resolver: res,
@@ -162,7 +158,7 @@ func TestSessionReferenceClassificationErrors(t *testing.T) {
 	}
 }
 
-// TestSessionReferenceTooManyRejected 验证引用数量超限返回 TOO_MANY。
+// TestSessionReferenceTooManyRejected returns TOO_MANY above the reference limit.
 func TestSessionReferenceTooManyRejected(t *testing.T) {
 	res := newTestResolver(t, map[string]string{})
 	var sb strings.Builder
@@ -180,7 +176,7 @@ func TestSessionReferenceTooManyRejected(t *testing.T) {
 	}
 }
 
-// TestSessionReferenceBudgetExceeded 验证聚合上下文超预算返回 BUDGET_EXCEEDED。
+// TestSessionReferenceBudgetExceeded returns BUDGET_EXCEEDED for oversized aggregate context.
 func TestSessionReferenceBudgetExceeded(t *testing.T) {
 	res := newTestResolver(t, map[string]string{"big": strings.Repeat("x", 1000)})
 	_, err := session.Prepare(session.PrepareRequest{
@@ -193,7 +189,8 @@ func TestSessionReferenceBudgetExceeded(t *testing.T) {
 	}
 }
 
-// TestSessionReferenceWriteAuditData 验证 PreparedReferencedMessage 可映射进 user/message(source=reference, refs)。
+// TestSessionReferenceWriteAuditData maps prepared references into user/message source and refs
+// fields.
 func TestSessionReferenceWriteAuditData(t *testing.T) {
 	res := newTestResolver(t, map[string]string{"s1": "snapshot-1"})
 	prepared, err := session.Prepare(session.PrepareRequest{
@@ -203,7 +200,7 @@ func TestSessionReferenceWriteAuditData(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// 构造 user/message 审计事件（source=reference + refs），验证与 UserMessageData 字段连通。
+	// Construct a reference-source user message and verify its UserMessageData audit fields.
 	refs := make([]any, 0, len(prepared.References))
 	for _, r := range prepared.References {
 		refs = append(refs, r)
@@ -213,7 +210,7 @@ func TestSessionReferenceWriteAuditData(t *testing.T) {
 		Source:  "reference",
 		Refs:    refs,
 	}
-	// UserMessageData 的 Source 字段承载 reference 语义，供下游用 M05 deriveMessages 保留审计。
+	// UserMessageData.Source identifies reference-origin messages for downstream auditing.
 	if msg.Source != "reference" || msg.Content != prepared.Content {
 		t.Fatalf("user/message 审计数据不完整: %+v", msg)
 	}

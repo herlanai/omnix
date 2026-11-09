@@ -1,11 +1,7 @@
-// 本文件对应任务 M10：PromptContext 动态注册与快照。
-//
-// 对齐上游：packages/core/system-prompt/context-prompt
-//
-// 与 PromptSection 的差异：
-//   - Section → system prompt 前缀，静态声明（M09）；
-//   - Context → user-msg 末尾追加的动态片段（如运行时上下文快照），可增删；
-//   - compaction 删除老上下文后仍保留最新快照（change-only 持久化），保证可重建。
+// PromptContext registration and snapshots (M10), matching context-prompt.
+// Static PromptSections form the system prefix; dynamic Context fragments append
+// to user messages and may be added or removed. Change-only persistence retains
+// the latest snapshot after compaction so context can be reconstructed.
 package sysprompt
 
 import (
@@ -16,47 +12,47 @@ import (
 	"sync"
 )
 
-// RuntimeContext 是动态上下文片段（注册表管理，增删即生效）。
+// RuntimeContext is a dynamic fragment whose registration or removal takes effect immediately.
 type RuntimeContext struct {
-	// Name 唯一标识。
+	// Name uniquely identifies the fragment.
 	Name string
-	// Order 排序（决定在 user-msg 末尾的拼接顺序）。
+	// Order determines concatenation order at the end of the user message.
 	Order int
-	// Content 动态内容（由调用方每次提供最新快照）。
+	// Content is the latest dynamic snapshot supplied by the caller.
 	Content string
 }
 
-// ContextRegistry 是 PromptContext 注册表 + 快照哈希。
+// ContextRegistry registers PromptContext fragments and hashes snapshots.
 type ContextRegistry struct {
-	mu      sync.RWMutex
-	ctxs    map[string]*RuntimeContext
+	mu       sync.RWMutex
+	ctxs     map[string]*RuntimeContext
 	lastHash string
 }
 
-// NewContextRegistry 创建上下文注册表。
+// NewContextRegistry creates a context registry.
 func NewContextRegistry() *ContextRegistry {
 	return &ContextRegistry{ctxs: map[string]*RuntimeContext{}}
 }
 
-// Register 注册（或更新）一个上下文片段。返回是否发生变化（hash diff）。
+// Register adds or updates a fragment and reports whether its hash changed.
 func (r *ContextRegistry) Register(name string, order int, content string) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if _, exists := r.ctxs[name]; exists && r.ctxs[name].Content == content && r.ctxs[name].Order == order {
-		return false // 无变化
+		return false // No change.
 	}
 	r.ctxs[name] = &RuntimeContext{Name: name, Order: order, Content: content}
 	return true
 }
 
-// Unregister 移除一个上下文片段。
+// Unregister removes a context fragment.
 func (r *ContextRegistry) Unregister(name string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	delete(r.ctxs, name)
 }
 
-// Compute 按 order 升序拼接全部上下文片段（确定性），并计算稳定哈希。
+// Compute concatenates fragments deterministically in ascending order and hashes them.
 func (r *ContextRegistry) Compute() (text string, hash string) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -73,7 +69,7 @@ func (r *ContextRegistry) Compute() (text string, hash string) {
 	}
 	text = strings.Join(parts, "\n")
 	if text == "" {
-		hash = "" // 空快照
+		hash = "" // Empty snapshot.
 	} else {
 		sum := sha256.Sum256([]byte(text))
 		hash = hex.EncodeToString(sum[:])
@@ -81,7 +77,7 @@ func (r *ContextRegistry) Compute() (text string, hash string) {
 	return text, hash
 }
 
-// Snapshot 返回当前全部片段的稳定快照（change-only 持久化用）。
+// Snapshot returns a stable fragment snapshot for change-only persistence.
 func (r *ContextRegistry) Snapshot() map[string]string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -92,39 +88,39 @@ func (r *ContextRegistry) Snapshot() map[string]string {
 	return out
 }
 
-// LastHash 返回最近一次 Compute 的哈希（用于 change-only 注入判断）。
+// LastHash returns the last Compute hash for change-only injection checks.
 func (r *ContextRegistry) LastHash() string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return r.lastHash
 }
 
-// SetLastHash 记录已注入的哈希（避免重复注入）。
+// SetLastHash records the injected hash to prevent duplicate injection.
 func (r *ContextRegistry) SetLastHash(h string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.lastHash = h
 }
 
-// GoalRoundContext 是目标续轮的动态上下文（goal.active 时注入，完成时停止）。
+// GoalRoundContext supplies active-goal continuation context and stops after completion.
 type GoalRoundContext struct {
-	// Active 目标是否处于活跃状态。
+	// Active reports whether the goal is active.
 	Active bool
-	// Round 当前轮次。
+	// Round is the current round.
 	Round int
-	// GoalDesc 目标描述。
+	// GoalDesc describes the goal.
 	GoalDesc string
 }
 
-// Render 渲染续轮提示文本（goal.active 时才有内容）。
+// Render returns continuation guidance only for active goals.
 func (g *GoalRoundContext) Render() string {
 	if !g.Active {
-		return "" // goal.complete 后自动停止注入
+		return "" // Stop injecting after goal completion.
 	}
 	return "[目标续轮 #" + itoa(g.Round) + "] " + g.GoalDesc
 }
 
-// itoa 最小整数转字符串。
+// itoa converts an integer to a string.
 func itoa(n int) string {
 	if n == 0 {
 		return "0"

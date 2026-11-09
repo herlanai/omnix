@@ -1,4 +1,4 @@
-// 本文件对应任务 M14：User Questions 接缝。
+// M14 User Questions integration tests.
 package tests
 
 import (
@@ -8,7 +8,7 @@ import (
 	"github.com/herlanai/omnix/pkg/userq"
 )
 
-// mockProvider 是自定义 provider（可编程返回）。
+// mockProvider returns programmable answers.
 type mockProvider struct {
 	idx      int
 	custom   string
@@ -20,15 +20,15 @@ func (m *mockProvider) Ask(ctx context.Context, opts userq.QuestionOptions) (*us
 	return &userq.QuestionResult{SelectedIndex: m.idx, Custom: m.custom, SelectedIndices: []int{m.idx}}, nil
 }
 
-// TestUserQStubDefault 验证 stub 返回默认选项。
+// TestUserQStubDefault returns the default option from the stub.
 func TestUserQStubDefault(t *testing.T) {
 	svc := userq.New(userq.NewStub())
 	ctx := context.Background()
 
 	idx, custom, err := svc.Ask(ctx, userq.QuestionOptions{
-		Prompt:    "是否继续？",
-		Choices:   []string{"是", "否"},
-		Intent:    "plan-exit",
+		Prompt:  "是否继续？",
+		Choices: []string{"是", "否"},
+		Intent:  "plan-exit",
 	})
 	if err != nil {
 		t.Fatalf("Ask 失败: %v", err)
@@ -41,11 +41,11 @@ func TestUserQStubDefault(t *testing.T) {
 	}
 }
 
-// TestUserQProviderSwap 验证替换 provider 后 Ask 路由到自定义实现。
+// TestUserQProviderSwap routes Ask to the replacement provider.
 func TestUserQProviderSwap(t *testing.T) {
 	svc := userq.New(userq.NewStub())
 
-	// 替换为自定义 mock
+	// Install the custom mock provider.
 	mp := &mockProvider{idx: 2, custom: "自定义输入"}
 	svc.SetProvider(mp)
 
@@ -57,13 +57,13 @@ func TestUserQProviderSwap(t *testing.T) {
 	if idx != 2 || custom != "自定义输入" {
 		t.Fatalf("应路由到自定义实现: idx=%d custom=%q", idx, custom)
 	}
-	// 验证 intent 标签透传
+	// Verify intent-label propagation.
 	if mp.callOpts.Intent != "approval" || mp.callOpts.MultiSelect {
 		t.Fatalf("intent 透传异常: %+v", mp.callOpts)
 	}
 }
 
-// TestUserQMultiSelect 验证多选语义。
+// TestUserQMultiSelect verifies multiple selections.
 func TestUserQMultiSelect(t *testing.T) {
 	svc := userq.New(userq.NewStub())
 	ctx := context.Background()
@@ -81,7 +81,7 @@ func TestUserQMultiSelect(t *testing.T) {
 	}
 }
 
-// TestUserQNoProvider 验证未安装 provider 时报错。
+// TestUserQNoProvider returns an error without an installed provider.
 func TestUserQNoProvider(t *testing.T) {
 	svc := userq.New(nil)
 	if _, _, err := svc.Ask(context.Background(), userq.QuestionOptions{}); err == nil {

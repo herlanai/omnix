@@ -1,14 +1,14 @@
-// Package fileref 复刻官方 context/file-reference 的 @文件引用语法：提取光标处
-// 正在输入的 @token，并把选中的路径格式化为 @path / @"path" 文本。
+// Package fileref implements context/file-reference @ mentions: find the token
+// at the cursor and format selected paths as @path or @"path".
 package fileref
 
 import "regexp"
 
-// Token 是光标处活动的 @token。
+// Token describes the active @ token at the cursor.
 type Token struct {
-	Prefix string // 被整体替换的 token
-	Query  string // @ 之后的路径查询
-	Quoted bool   // 是否引号路径
+	Prefix string // The complete token to replace.
+	Query  string // Path query following @.
+	Quoted bool   // Whether the path is quoted.
 }
 
 var (
@@ -16,7 +16,7 @@ var (
 	rePlain  = regexp.MustCompile(`(?:^|\s)(@([^\s@]*))$`)
 )
 
-// ActiveAtToken 提取光标列之前的 @path 或 @"path" token；不在 @token 上时 ok=false。
+// ActiveAtToken extracts an @path or quoted token before the cursor, or returns false.
 func ActiveAtToken(line string, cursorCol int) (Token, bool) {
 	if cursorCol < 0 || cursorCol > len(line) {
 		return Token{}, false
@@ -34,8 +34,8 @@ func ActiveAtToken(line string, cursorCol int) (Token, bool) {
 var unsafePath = regexp.MustCompile(`[\x00-\x1f\x7f-\x9f"]`)
 var hasSpace = regexp.MustCompile(`\s`)
 
-// FormatMention 把选中路径格式化为插入文本。目录保留尾斜杠；含空白用引号；
-// 遇到语法无法安全表示的路径返回空串。
+// FormatMention formats a selected path, retaining directory slashes and quoting
+// whitespace. It returns empty when the syntax cannot safely represent the path.
 func FormatMention(path string, isDir, preserveQuote bool) string {
 	if isDir && len(path) > 0 && path[len(path)-1] != '/' {
 		path += "/"

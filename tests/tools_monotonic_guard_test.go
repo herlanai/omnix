@@ -1,9 +1,5 @@
-// Package tests 的单调守卫（Monotonic Guard）验收测试。
-//
-// 覆盖工具流水线最终防线的偏序收敛：
-//   - 首次赋值总是接受
-//   - 决策可收紧（allow→deny、ask→deny），不可放宽（deny→allow 被拒）
-//   - 放宽被拒时原决策保持不变（fail closed）
+// Monotonic-guard tests accept initial decisions, allow tightening from allow/ask to deny, reject
+// widening from deny to allow, and preserve the previous decision on rejection.
 package tests
 
 import (
@@ -41,7 +37,7 @@ func TestMonotonicGuardCannotRelax(t *testing.T) {
 	if !errors.Is(err, tools.ErrGuardRelaxed) {
 		t.Fatalf("deny→allow relax should be rejected, got %v", err)
 	}
-	// 原决策保持 deny
+	// The original deny decision must remain unchanged.
 	if g.Decision() != tools.PreDeny || !g.IsDenied() {
 		t.Fatal("original stricter decision must be preserved")
 	}

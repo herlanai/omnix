@@ -1,17 +1,9 @@
-// Package sandbox 提供进程沙箱（Process Sandbox）接缝。
-//
-// 对齐上游：packages/sandbox/sandbox + sandbox-policy
-//
-// 本文件对应任务 M26：Sandbox 接缝 3 模式 + {root, enforced} 元组。
-//
-// 设计要点：
-//   - SandboxMode 只约束文件系统副作用：read-only / workspace-write / danger-full-access。
-//   - SandboxExecutionPolicy 是「每次能力调用」都携带的完整文件效果策略：
-//     即便是 danger 模式也会带上 workspaceRoot，以便消费者一次性解析再决定是否绕过。
-//   - 消费者（Bash / FS）各自调用 SandboxPolicyService.Resolve()，得到对同一会话一致的策略，
-//     这避免了两个消费者各自重复实现模式优先级与根回落逻辑。
-//   - Provider.confine() 只对受约束（非 danger）模式生效；无可用后端必须 fail-closed，
-//     绝不静默放行（SANDBOX_UNAVAILABLE）。
+// Package sandbox defines process confinement, following upstream sandbox and
+// sandbox-policy (M26). Modes constrain filesystem effects only. Each call
+// resolves a complete execution policy, including workspaceRoot even in danger
+// mode. Bash and filesystem consumers share policy resolution to keep mode
+// precedence and root fallback consistent. Confine applies only to constrained
+// modes and must fail closed with SANDBOX_UNAVAILABLE if no backend exists.
 package sandbox
 
 import (
@@ -22,105 +14,101 @@ import (
 	"github.com/herlanai/omnix/pkg/brand"
 )
 
-// ============================================================================
-// 模式与强制程度
-// ============================================================================
+// Modes and enforcement levels.
 
-// SandboxMode 沙箱模式：只约束文件系统副作用。
+// SandboxMode constrains filesystem side effects.
 type SandboxMode string
 
-// 沙箱模式枚举（与 pkg/session.SandboxMode 对齐）。
+// Modes match pkg/session.SandboxMode.
 const (
-	ModeReadOnly        SandboxMode = "read-only"
-	ModeWorkspaceWrite  SandboxMode = "workspace-write"
+	ModeReadOnly         SandboxMode = "read-only"
+	ModeWorkspaceWrite   SandboxMode = "workspace-write"
 	ModeDangerFullAccess SandboxMode = "danger-full-access"
 )
 
-// ConfinedSandboxMode 是可交给 Provider 的受约束模式（排除 danger-full-access）。
-// danger-full-access 的消费者直接使用原始 argv，不调用 ctx.sandbox。
+// ConfinedSandboxMode excludes danger-full-access. Danger-mode consumers
+// execute their original argv directly without calling the sandbox provider.
 type ConfinedSandboxMode string
 
-// 受约束模式集合。
+// Supported confined modes.
 const (
 	ConfinedReadOnly       ConfinedSandboxMode = "read-only"
 	ConfinedWorkspaceWrite ConfinedSandboxMode = "workspace-write"
 )
 
-// SandboxEnforcement 是强制完成的报告事实：full 表示后端覆盖该模式承诺的全部文件效果；
-// partial 表示活动后端或旧内核 ABI 只覆盖子集，要求绝对边界的消费者不得当 full 使用。
+// SandboxEnforcement reports actual coverage. Full covers all filesystem
+// effects promised by the mode; partial covers only a subset because of backend
+// or kernel limitations. Consumers needing strict boundaries must reject partial.
 type SandboxEnforcement string
 
-// 强制枚举。
+// Enforcement levels.
 const (
 	EnforcementFull    SandboxEnforcement = "full"
 	EnforcementPartial SandboxEnforcement = "partial"
 )
 
-// ============================================================================
-// 执行策略
-// ============================================================================
+// Execution policy.
 
-// SandboxExecutionPolicy 是一次能力调用解析出的完整文件效果策略。
-// 即便在 danger 模式下也携带 workspaceRoot，供消费者一次性解析后决定执行路径。
+// SandboxExecutionPolicy is the resolved filesystem policy for one capability
+// call. It retains workspaceRoot in danger mode so consumers resolve once
+// before choosing the execution path.
 type SandboxExecutionPolicy struct {
-	// Mode 是本次执行的文件效果模式。
+	// Mode selects filesystem effects for this execution.
 	Mode SandboxMode `json:"mode"`
-	// WorkspaceRoot 是 workspace-write 可写作业的绝对根目录。
+	// WorkspaceRoot is the absolute writable workspace root.
 	WorkspaceRoot string `json:"workspaceRoot"`
-	// SessionID 是调用会话的标识（无头调用时为空，后端退化为每次调用的自有状态）。
+	// SessionID identifies the calling session; empty gives agentless calls per-call backend state.
 	SessionID brand.SessionID `json:"sessionId,omitempty"`
 }
 
-// IsDanger 报告该策略是否为危险全访问（需绕过沙箱直接 spawn 原始 argv）。
+// IsDanger reports whether to bypass confinement and spawn the original argv.
 func (p SandboxExecutionPolicy) IsDanger() bool {
 	return p.Mode == ModeDangerFullAccess
 }
 
-// SandboxPolicy 是每次受约束执行允许触及的边界，按调用携带而非固定在后端上。
+// SandboxPolicy carries the boundary for each confined call, not fixed backend state.
 type SandboxPolicy struct {
 	SandboxExecutionPolicy
-	// Mode 覆盖为受约束模式（read-only / workspace-write）。
+	// Mode is restricted to read-only or workspace-write.
 	Mode ConfinedSandboxMode `json:"mode"`
 }
 
-// ============================================================================
-// 策略解析服务
-// ============================================================================
+// Policy resolution service.
 
-// Session 是策略服务所依赖的会话抽象：不可变 cwd 即 workspace 边界，
-// 最后一次 logged 的沙箱模式作为会话级覆盖。
+// Session exposes the immutable working directory as the workspace boundary
+// and the last logged sandbox mode as a session override.
 type Session interface {
-	// ID 返回会话标识（branded SessionId）。
+	// ID returns the branded session identifier.
 	ID() brand.SessionID
-	// Cwd 返回会话不可变工作目录（workspace-write 的边界）；空串表示无 cwd。
+	// Cwd returns the immutable workspace boundary, or empty if absent.
 	Cwd() string
-	// SandboxMode 返回会话日志中最后一次沙箱模式覆盖；未记录时 ok=false。
+	// SandboxMode returns the latest logged override, with ok false if absent.
 	SandboxMode() (SandboxMode, bool)
 }
 
-// SandboxPolicyRequest 是选择一次能力调用的沙箱策略的输入。
+// SandboxPolicyRequest supplies inputs for resolving one capability call's policy.
 type SandboxPolicyRequest struct {
-	// Session 是调用会话；其不可变 cwd 成为 workspace 边界。
+	// Session supplies the immutable working-directory boundary.
 	Session Session
-	// Mode 是显式审批/覆盖后的模式，优先级高于会话策略。
+	// Mode is an explicit approved override taking precedence over session policy.
 	Mode *SandboxMode
 }
 
-// SandboxPolicyService 是 ctx.sandboxPolicy 的 Go 实现。
-// 它拥有默认模式优先级与根回落逻辑，Bash/FS 两个消费者复用同一份解析。
+// SandboxPolicyService implements ctx.sandboxPolicy, sharing mode precedence
+// and root fallback between Bash and filesystem consumers.
 type SandboxPolicyService struct {
-	// DefaultMode 是部署默认模式（agentless 时回落）。
+	// DefaultMode is the deployment default, including agentless calls.
 	DefaultMode SandboxMode
-	// FallbackRoot 是 agentless / 无 cwd 会话的回落工作区根。
+	// FallbackRoot is the workspace root for agentless sessions or missing cwd.
 	FallbackRoot string
 }
 
-// NewPolicyService 创建策略服务。
+// NewPolicyService creates a policy resolver.
 func NewPolicyService(defaultMode SandboxMode, fallbackRoot string) *SandboxPolicyService {
 	return &SandboxPolicyService{DefaultMode: defaultMode, FallbackRoot: fallbackRoot}
 }
 
-// OverrideOf 读取会话的沙箱模式覆盖，不应用部署默认；无覆盖返回 ok=false。
+// OverrideOf reads only the session override, returning ok false rather than applying defaults.
 func (s *SandboxPolicyService) OverrideOf(session Session) (SandboxMode, bool) {
 	if session == nil {
 		return "", false
@@ -128,10 +116,9 @@ func (s *SandboxPolicyService) OverrideOf(session Session) (SandboxMode, bool) {
 	return session.SandboxMode()
 }
 
-// Resolve 为一次能力调用解析完整策略。
-//
-// 优先级（高 → 低）：显式审批覆盖 req.Mode → 会话最后 logged 模式 → 部署默认模式。
-// workspaceRoot：会话 cwd（已规范化）→ 配置的回落根（agentless）。
+// Resolve selects a complete policy for one call. Precedence is explicit
+// req.Mode, latest logged session mode, then deployment default. The root is
+// the canonical session cwd or the configured agentless fallback.
 func (s *SandboxPolicyService) Resolve(req SandboxPolicyRequest) SandboxExecutionPolicy {
 	mode := s.DefaultMode
 	if req.Session != nil {
@@ -143,7 +130,7 @@ func (s *SandboxPolicyService) Resolve(req SandboxPolicyRequest) SandboxExecutio
 		mode = *req.Mode
 	}
 
-	// 解析 workspace 根：会话 cwd 优先，否则回落根。
+	// Prefer the session cwd, otherwise use the fallback root.
 	root := s.FallbackRoot
 	if req.Session != nil {
 		if cwd := req.Session.Cwd(); cwd != "" {
@@ -163,7 +150,7 @@ func (s *SandboxPolicyService) Resolve(req SandboxPolicyRequest) SandboxExecutio
 	}
 }
 
-// ToConfined 把执行策略降级为受约束策略（调用方需先确认非 danger）。
+// ToConfined converts execution policy after the caller has excluded danger mode.
 func (p SandboxExecutionPolicy) ToConfined() (SandboxPolicy, error) {
 	switch p.Mode {
 	case ModeReadOnly:
@@ -175,7 +162,7 @@ func (p SandboxExecutionPolicy) ToConfined() (SandboxPolicy, error) {
 	}
 }
 
-// canonicalize 规范化根路径为绝对路径（文件系统语义后做词法规范化）。
+// canonicalize resolves filesystem paths, then lexically cleans the absolute root.
 func canonicalize(root string) string {
 	if root == "" {
 		return root
@@ -187,21 +174,19 @@ func canonicalize(root string) string {
 	return filepath.Clean(abs)
 }
 
-// ============================================================================
-// Provider 接缝 + 受限 argv
-// ============================================================================
+// Provider interface and confined commands.
 
-// RunnerFailureRule 是辨识「沙箱 runner 在执行命令前失败」的证据规则。
+// RunnerFailureRule identifies runner failure before the command executes.
 type RunnerFailureRule struct {
-	// AllowedExitCodes 非零进程退出码白名单；省略表示允许任意非零退出码。
+	// AllowedExitCodes optionally restricts matching to listed nonzero exit codes.
 	AllowedExitCodes []int `json:"allowedExitCodes,omitempty"`
-	// FatalSignatures 单条 stderr 行上的致命诊断子串（不区分大小写）。
+	// FatalSignatures are case-insensitive diagnostic substrings on individual stderr lines.
 	FatalSignatures []string `json:"fatalSignatures"`
-	// InformationalLines 在致命匹配前被排除的无害 stderr 全行（不区分大小写精确匹配）。
+	// InformationalLines excludes harmless case-insensitive whole-line matches before fatal checks.
 	InformationalLines []string `json:"informationalLines,omitempty"`
 }
 
-// Matches 应用规则：先按退出码门控，移除 info 行，再在剩余 stderr 行内做致命子串匹配。
+// Matches checks the exit code, excludes informational lines, then searches for fatal substrings.
 func (r RunnerFailureRule) Matches(exitCode int, stderr string) (string, bool) {
 	if exitCode == 0 {
 		return "", false
@@ -218,7 +203,7 @@ func (r RunnerFailureRule) Matches(exitCode int, stderr string) (string, bool) {
 			return "", false
 		}
 	}
-	// 移除 info 行（不区分大小写精确全行）。
+	// Remove informational lines using case-insensitive whole-line matching.
 	info := map[string]bool{}
 	for _, l := range r.InformationalLines {
 		info[strings.ToLower(l)] = true
@@ -229,7 +214,7 @@ func (r RunnerFailureRule) Matches(exitCode int, stderr string) (string, bool) {
 			remaining = append(remaining, line)
 		}
 	}
-	// 逐行做致命子串匹配。
+	// Match fatal substrings within each remaining line.
 	joined := strings.Join(remaining, "\n")
 	lower := strings.ToLower(joined)
 	for _, sig := range r.FatalSignatures {
@@ -240,30 +225,30 @@ func (r RunnerFailureRule) Matches(exitCode int, stderr string) (string, bool) {
 	return "", false
 }
 
-// ConfinedArgv 是 Provider.confine 的产物：替换后的 argv + 该后端达到的强制程度 +
-// 两个正交的 stderr 分类器（denial + runner-failure）。
+// ConfinedArgv contains wrapped argv, achieved enforcement, and independent
+// stderr classifiers for denials and runner failures.
 type ConfinedArgv struct {
-	// Argv 是包裹后的 argv（runner、profile、分隔符再到调用方 argv）。
+	// Argv combines runner, profile, separator, and original command arguments.
 	Argv []string `json:"argv"`
-	// Enforcement 是所选后端对该策略能实现的强制完整度。
+	// Enforcement reports the backend's coverage for this policy.
 	Enforcement SandboxEnforcement `json:"enforcement"`
-	// DenialSignatures 是该后端被某些命令拒绝时的 stderr dialect 子串集合。
+	// DenialSignatures contains backend-specific stderr denial substrings.
 	DenialSignatures []string `json:"denialSignatures"`
-	// RunnerFailureRules 是结构化 runner 失败证据规则。
+	// RunnerFailureRules contains structured evidence of runner failure.
 	RunnerFailureRules []RunnerFailureRule `json:"runnerFailureRules"`
 }
 
-// SandboxProvider 是抽象进程沙箱服务（ctx.sandbox）。
+// SandboxProvider abstracts process confinement through ctx.sandbox.
 type SandboxProvider interface {
-	// Confine 把 argv 包裹使其在 policy 下受约束执行；必须 fail-closed
-	// （无可用后端或包裹失败返回错误），绝不允许静默无约束放行。
+	// Confine wraps argv under the policy and must fail closed on missing backends
+	// or wrapping errors; it must never silently execute without confinement.
 	Confine(argv []string, policy SandboxPolicy) (ConfinedArgv, error)
 }
 
-// SandboxUnavailableErrorCode 是沙箱不可用错误的稳定分类码。
+// SandboxUnavailableErrorCode is the stable unavailable-backend error code.
 const SandboxUnavailableErrorCode = "SANDBOX_UNAVAILABLE"
 
-// SandboxUnavailableError 表示没有可用后端。
+// SandboxUnavailableError indicates no usable backend.
 type SandboxUnavailableError struct {
 	Msg string
 }
@@ -272,11 +257,11 @@ func (e *SandboxUnavailableError) Error() string {
 	return fmt.Sprintf("%s: %s", SandboxUnavailableErrorCode, e.Msg)
 }
 
-// UnavailableProvider 是 fail-closed 桩：任何 confine 都报 SANDBOX_UNAVAILABLE，
-// 用于「无可用后端」的生产缺省。
+// UnavailableProvider always fails closed with SANDBOX_UNAVAILABLE and is
+// the production fallback when no backend is available.
 type UnavailableProvider struct{}
 
-// Confine 实现 fail-closed：始终不可用。
+// Confine always reports unavailable, enforcing fail-closed behavior.
 func (*UnavailableProvider) Confine([]string, SandboxPolicy) (ConfinedArgv, error) {
 	return ConfinedArgv{}, &SandboxUnavailableError{Msg: "no usable sandbox backend"}
 }

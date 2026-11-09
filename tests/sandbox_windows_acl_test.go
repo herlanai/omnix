@@ -1,7 +1,7 @@
 //go:build windows
 // +build windows
 
-// Package tests 的 Windows ACL 后端验收测试。
+// Windows ACL backend tests.
 package tests
 
 import (
@@ -12,7 +12,7 @@ import (
 	"github.com/herlanai/omnix/pkg/sandbox"
 )
 
-// TestWindowsACLProviderAvailable 验证 Windows ACL 后端在 Windows 上可用。
+// TestWindowsACLProviderAvailable verifies availability on Windows.
 func TestWindowsACLProviderAvailable(t *testing.T) {
 	p := sandbox.NewWindowsACLProvider(t.TempDir())
 	if !p.Available() {
@@ -20,7 +20,7 @@ func TestWindowsACLProviderAvailable(t *testing.T) {
 	}
 }
 
-// TestWindowsACLProviderConfineReadOnly 验证 read-only 模式的 Confine。
+// TestWindowsACLProviderConfineReadOnly exercises read-only confinement.
 func TestWindowsACLProviderConfineReadOnly(t *testing.T) {
 	p := sandbox.NewWindowsACLProvider(t.TempDir())
 	policy := sandbox.SandboxPolicy{
@@ -34,25 +34,25 @@ func TestWindowsACLProviderConfineReadOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Confine 不应报错: %v", err)
 	}
-	// enforcement 应为 full 或 partial（非管理员环境下受限令牌创建可能降级为 partial）
+	// Enforcement may be full or partial when a non-administrator cannot create a restricted token.
 	if result.Enforcement != sandbox.EnforcementFull && result.Enforcement != sandbox.EnforcementPartial {
 		t.Fatalf("enforcement 应为 full 或 partial, 实际 %s", result.Enforcement)
 	}
-	// argv 应保持不变
+	// Preserve the original arguments.
 	if len(result.Argv) != 2 || result.Argv[0] != "echo" || result.Argv[1] != "hello" {
 		t.Fatalf("argv 应保持不变, 实际 %v", result.Argv)
 	}
 }
 
-// TestWindowsACLProviderCreateRestrictedToken 验证受限令牌创建。
+// TestWindowsACLProviderCreateRestrictedToken verifies restricted-token creation.
 func TestWindowsACLProviderCreateRestrictedToken(t *testing.T) {
 	p := sandbox.NewWindowsACLProvider(t.TempDir())
 	token, err := p.CreateRestrictedToken()
 	if err != nil {
 		t.Fatalf("CreateRestrictedToken 不应报错: %v", err)
 	}
-	// token 可能为 0（非管理员环境下降级），也可能非 0
-	// 第二次调用应返回相同结果
+	// The token may be zero after non-administrator fallback; repeated calls must return the same
+	// result.
 	token2, err := p.CreateRestrictedToken()
 	if err != nil {
 		t.Fatalf("第二次 CreateRestrictedToken 不应报错: %v", err)
@@ -62,7 +62,7 @@ func TestWindowsACLProviderCreateRestrictedToken(t *testing.T) {
 	}
 }
 
-// TestWindowsACLProviderSetupTempDir 验证临时目录创建。
+// TestWindowsACLProviderSetupTempDir creates a temporary directory.
 func TestWindowsACLProviderSetupTempDir(t *testing.T) {
 	p := sandbox.NewWindowsACLProvider(t.TempDir())
 	tempDir, err := p.SetupTempDir()
@@ -72,11 +72,11 @@ func TestWindowsACLProviderSetupTempDir(t *testing.T) {
 	if tempDir == "" {
 		t.Fatal("临时目录不应为空")
 	}
-	// 验证目录存在
+	// Verify the directory exists.
 	if _, err := os.Stat(tempDir); err != nil {
 		t.Fatalf("临时目录应存在: %v", err)
 	}
-	// 第二次调用应返回缓存的目录
+	// A second call must return the cached directory.
 	tempDir2, err := p.SetupTempDir()
 	if err != nil {
 		t.Fatalf("第二次 SetupTempDir 不应报错: %v", err)
@@ -86,7 +86,7 @@ func TestWindowsACLProviderSetupTempDir(t *testing.T) {
 	}
 }
 
-// TestWindowsACLProviderGrantWorkspaceAccess 验证工作区 ACL 设置。
+// TestWindowsACLProviderGrantWorkspaceAccess verifies workspace ACL setup.
 func TestWindowsACLProviderGrantWorkspaceAccess(t *testing.T) {
 	dir := t.TempDir()
 	p := sandbox.NewWindowsACLProvider(dir)
@@ -94,16 +94,16 @@ func TestWindowsACLProviderGrantWorkspaceAccess(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GrantWorkspaceAccess 不应报错: %v", err)
 	}
-	// 验证目录仍然存在
+	// The directory must still exist.
 	if _, err := os.Stat(dir); err != nil {
 		t.Fatalf("目录应存在: %v", err)
 	}
 }
 
-// TestWindowsACLProviderCleanup 验证清理。
+// TestWindowsACLProviderCleanup verifies cleanup.
 func TestWindowsACLProviderCleanup(t *testing.T) {
 	p := sandbox.NewWindowsACLProvider(t.TempDir())
-	// 先创建令牌和临时目录
+	// Create the token and temporary directory first.
 	if _, err := p.CreateRestrictedToken(); err != nil {
 		t.Fatalf("CreateRestrictedToken: %v", err)
 	}
@@ -111,23 +111,23 @@ func TestWindowsACLProviderCleanup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SetupTempDir: %v", err)
 	}
-	// 清理
+	// Clean up resources.
 	if err := p.Cleanup(); err != nil {
 		t.Fatalf("Cleanup 不应报错: %v", err)
 	}
-	// 验证临时目录已删除
+	// The temporary directory must be removed.
 	if _, err := os.Stat(tempDir); !os.IsNotExist(err) {
 		t.Fatalf("临时目录应已删除, 但仍然存在或有其他错误: %v", err)
 	}
 }
 
-// TestWindowsACLProviderSpawnWithToken 验证使用受限令牌启动进程。
+// TestWindowsACLProviderSpawnWithToken starts a process using a restricted token.
 func TestWindowsACLProviderSpawnWithToken(t *testing.T) {
 	p := sandbox.NewWindowsACLProvider(t.TempDir())
 	workDir := t.TempDir()
-	// 创建一个输出文件
+	// Create an output file.
 	outputFile := filepath.Join(workDir, "output.txt")
-	// 使用 cmd /c echo 测试
+	// Use cmd /c echo for the test.
 	proc, err := p.SpawnWithToken(
 		[]string{"cmd", "/c", "echo", "hello", ">", outputFile},
 		nil,
@@ -139,7 +139,7 @@ func TestWindowsACLProviderSpawnWithToken(t *testing.T) {
 	if proc == nil {
 		t.Fatal("进程不应为 nil")
 	}
-	// 等待进程结束
+	// Wait for process termination.
 	state, err := proc.Wait()
 	if err != nil {
 		t.Fatalf("Wait 不应报错: %v", err)

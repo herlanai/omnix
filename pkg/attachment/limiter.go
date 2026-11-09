@@ -1,18 +1,18 @@
-// limiter.go 复刻官方 attachment-local/compression-limiter：实例级 FIFO 并发上限，
-// 限制同时进行的原生图像变换数量，超出的任务排队等待空位。
+// The attachment-local/compression-limiter contract uses a per-instance FIFO
+// limit on concurrent native image transformations; excess work waits for a slot.
 package attachment
 
 import "sync"
 
-// Limiter 是固定并发度的 FIFO 限流器。
+// Limiter is a FIFO concurrency limiter.
 type Limiter struct {
 	slots chan struct{}
-	// FIFO 等待队列
+	// FIFO wait queue.
 	mu      sync.Mutex
 	waiters []chan struct{}
 }
 
-// NewLimiter 创建并发上限为 concurrency 的限流器；非正值按 1 处理。
+// NewLimiter creates a limiter; nonpositive concurrency defaults to one.
 func NewLimiter(concurrency int) *Limiter {
 	if concurrency < 1 {
 		concurrency = 1
@@ -20,10 +20,10 @@ func NewLimiter(concurrency int) *Limiter {
 	return &Limiter{slots: make(chan struct{}, concurrency)}
 }
 
-// Acquire 获取一个槽位（阻塞直到有空位），Release 归还。
+// Acquire waits for a slot, which must be returned with Release.
 func (l *Limiter) Acquire() { l.slots <- struct{}{} }
 
-// TryAcquire 尝试非阻塞获取。
+// TryAcquire attempts to acquire a slot without blocking.
 func (l *Limiter) TryAcquire() bool {
 	select {
 	case l.slots <- struct{}{}:
@@ -33,13 +33,13 @@ func (l *Limiter) TryAcquire() bool {
 	}
 }
 
-// Release 归还一个槽位。
+// Release returns a slot.
 func (l *Limiter) Release() { <-l.slots }
 
-// Active 返回当前占用槽位数。
+// Active returns the number of occupied slots.
 func (l *Limiter) Active() int { return len(l.slots) }
 
-// Run 获取槽位后执行 task，结束（无论成败）归还槽位。
+// Run acquires a slot and releases it after task completes, including on failure.
 func (l *Limiter) Run(task func()) {
 	l.Acquire()
 	defer l.Release()

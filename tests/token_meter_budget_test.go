@@ -1,9 +1,5 @@
-// Package tests 的 Token Meter（M31）验收测试。
-//
-// 覆盖：
-//   - 每次请求计量 prompt/completion token，按会话累计
-//   - 预算 10k tokens → 达到上限后下一轮请求被 budget deny 拒绝且不产生真实 LLM 调用
-//   - 表面节点定价估算
+// M31 token-meter tests cover per-request and per-session usage, a 10000-token budget rejecting
+// subsequent requests before real LLM calls, and surface-node cost estimates.
 package tests
 
 import (
@@ -12,7 +8,7 @@ import (
 	"github.com/herlanai/omnix/pkg/tokenmeter"
 )
 
-// TestTokenMeterAccumulate 验证每次请求计量与累计。
+// TestTokenMeterAccumulate verifies per-request and cumulative usage.
 func TestTokenMeterAccumulate(t *testing.T) {
 	m := tokenmeter.New(100000)
 	m.Record(tokenmeter.TokenUsage{PromptTokens: 1000, CompletionTokens: 500})
@@ -30,28 +26,27 @@ func TestTokenMeterAccumulate(t *testing.T) {
 	}
 }
 
-// TestTokenMeterBudgetDeny 验证预算 10k → 达到上限后下一轮请求被拒绝，不产生真实 LLM 调用。
+// TestTokenMeterBudgetDeny prevents LLM calls after reaching the 10000-token limit.
 func TestTokenMeterBudgetDeny(t *testing.T) {
 	const budget = 10000
 	m := tokenmeter.New(budget)
 
-	// 逐步记录直至接近预算。
+	// Accumulate usage toward the budget.
 	llmCalled := 0
 	for i := 0; i < 20; i++ {
-		// 模拟请求层：先 Check 预算，再打 LLM。
+		// Check the budget before invoking the LLM.
 		if err := m.Check(); err != nil {
-			break // 拒绝，不产生真实调用
+			break // Reject without making a real call.
 		}
 		llmCalled++
-		m.Record(tokenmeter.TokenUsage{PromptTokens: 600, CompletionTokens: 400}) // 每轮 1000
+		m.Record(tokenmeter.TokenUsage{PromptTokens: 600, CompletionTokens: 400}) // 1000 tokens per turn.
 	}
 
 	if !m.BudgetDenied() {
 		t.Fatal("累计达预算后应 budget-deny")
 	}
-	// 20 轮每轮 1000 = 20000，但 Check 在累计 >=10000 后拒绝。第 10.0 轮后累计 10000 → deny。
-	// 前 9 轮 Check 通过（9000），第 10 轮 Check 时累计 1000*9=9000<10000 通过记录到 10000，
-	// 第 11 轮 Check 时已有 10000+delta → deny。因此 llmCalled 应为 10。
+	// Each allowed turn records 1000 tokens. Turn 10 starts at 9000 and reaches 10000; turn 11 is
+	// denied, so exactly ten LLM calls occur despite attempting twenty turns.
 	if llmCalled != 10 {
 		t.Fatalf("应恰好产生 10 次真实 LLM 调用后拒绝, 实际 %d", llmCalled)
 	}
@@ -60,9 +55,9 @@ func TestTokenMeterBudgetDeny(t *testing.T) {
 	}
 }
 
-// TestTokenMeterNoBudget 验证 budget<=0 不限制。
+// TestTokenMeterNoBudget treats nonpositive budgets as unlimited.
 func TestTokenMeterNoBudget(t *testing.T) {
-	m := tokenmeter.New(0) // 不限制
+	m := tokenmeter.New(0) // Unlimited budget.
 	for i := 0; i < 30; i++ {
 		m.Record(tokenmeter.TokenUsage{PromptTokens: 1000, CompletionTokens: 1000})
 	}
@@ -74,7 +69,7 @@ func TestTokenMeterNoBudget(t *testing.T) {
 	}
 }
 
-// TestTokenMeterSurfacePricing 验证表面节点定价估算。
+// TestTokenMeterSurfacePricing verifies surface-node estimates.
 func TestTokenMeterSurfacePricing(t *testing.T) {
 	p := tokenmeter.SurfacePricing{"assistant/message": 4, "tool/result": 2, "user/message": 1}
 	cost := p.CostOf([]tokenmeter.SurfaceNode{

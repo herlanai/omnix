@@ -1,6 +1,6 @@
 //go:build windows
 
-// 平台相关实现（Windows）：新进程组 + taskkill 树终止 + 无信号词汇。
+// Windows uses new process groups and taskkill tree termination without signal names.
 package subprocess
 
 import (
@@ -8,14 +8,14 @@ import (
 	"syscall"
 )
 
-// syscallSIGTERM/SIGKILL 在 Windows 上无等价物（用 taskkill /T 直接截断树）。
+// Windows has no SIGTERM/SIGKILL equivalent here; taskkill /T terminates the tree.
 const (
 	syscallSIGTERM = 0
 	syscallSIGKILL = 0
 )
 
-// platformSetSysProcAttr 创建新的进程组（Windows：CREATE_NEW_PROCESS_GROUP），
-// 使 taskkill /T 能按树根终止该组。
+// platformSetSysProcAttr uses CREATE_NEW_PROCESS_GROUP so taskkill can terminate
+// the process tree from its root.
 func platformSetSysProcAttr(cmd *exec.Cmd) {
 	if cmd.SysProcAttr != nil {
 		cmd.SysProcAttr.CreationFlags |= syscall.CREATE_NEW_PROCESS_GROUP
@@ -24,8 +24,8 @@ func platformSetSysProcAttr(cmd *exec.Cmd) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: syscall.CREATE_NEW_PROCESS_GROUP}
 }
 
-// platformExitSignal Windows 无信号模型，返回 ""（退出码决定结果）。
+// platformExitSignal returns empty on Windows; exit codes determine outcomes.
 func platformExitSignal(*exec.ExitError) string { return "" }
 
-// platformSignalGroup Windows 不通过信号投递进程组（killTree 走 taskkill /T）。
+// platformSignalGroup is unused on Windows; killTree uses taskkill /T.
 func platformSignalGroup(int, int) error { return nil }

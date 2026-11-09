@@ -1,4 +1,4 @@
-// 本文件对应任务 M48：DefineTool JSON Schema 强校验子集。
+// M48 DefineTool supported JSON Schema validation tests.
 package tests
 
 import (
@@ -8,7 +8,7 @@ import (
 	"github.com/herlanai/omnix/pkg/tools"
 )
 
-// TestSchemaCompileAndValidate 验证基础 schema 编译 + 校验通过/失败。
+// TestSchemaCompileAndValidate compiles schemas and checks valid and invalid inputs.
 func TestSchemaCompileAndValidate(t *testing.T) {
 	schema, err := tools.Compile([]byte(`{
 		"type": "object",
@@ -23,34 +23,34 @@ func TestSchemaCompileAndValidate(t *testing.T) {
 		t.Fatalf("Compile 失败: %v", err)
 	}
 
-	// 通过场景
+	// Valid input.
 	ok := map[string]any{"name": "hello", "count": 3, "tags": []any{"a", "b"}}
 	if err := schema.Validate(ok); err != nil {
 		t.Fatalf("合法值应通过: %v", err)
 	}
 
-	// 缺必填字段
+	// Missing required field.
 	if err := schema.Validate(map[string]any{"count": 1}); err == nil {
 		t.Fatal("缺必填字段应校验失败")
 	}
 
-	// 类型错误
+	// Incorrect type.
 	if err := schema.Validate(map[string]any{"name": 42}); err == nil {
 		t.Fatal("类型错误应校验失败")
 	}
 
-	// minLength 违规
+	// minLength violation.
 	if err := schema.Validate(map[string]any{"name": ""}); err == nil {
 		t.Fatal("minLength 违规应校验失败")
 	}
 
-	// minItems 违规
+	// minItems violation.
 	if err := schema.Validate(map[string]any{"name": "x", "tags": []any{}}); err == nil {
 		t.Fatal("minItems 违规应校验失败")
 	}
 }
 
-// TestSchemaAdditionalPropertiesFalse 验证 additionalProperties=false 严格模式。
+// TestSchemaAdditionalPropertiesFalse verifies strict additionalProperties=false behavior.
 func TestSchemaAdditionalPropertiesFalse(t *testing.T) {
 	schema, err := tools.Compile([]byte(`{
 		"type": "object",
@@ -70,7 +70,7 @@ func TestSchemaAdditionalPropertiesFalse(t *testing.T) {
 	}
 }
 
-// TestSchemaEnumAndConst 验证 enum 与 const 语义。
+// TestSchemaEnumAndConst verifies enum and const semantics.
 func TestSchemaEnumAndConst(t *testing.T) {
 	enumSchema, err := tools.Compile([]byte(`{"type": "string", "enum": ["low", "medium", "high"]}`))
 	if err != nil {
@@ -95,7 +95,7 @@ func TestSchemaEnumAndConst(t *testing.T) {
 	}
 }
 
-// TestSchemaOneOf 验证 oneOf 语义（任一子 schema 匹配即通过）。
+// TestSchemaOneOf exercises alternative-schema matching.
 func TestSchemaOneOf(t *testing.T) {
 	schema, err := tools.Compile([]byte(`{
 		"oneOf": [
@@ -121,27 +121,27 @@ func TestSchemaOneOf(t *testing.T) {
 	}
 }
 
-// TestSchemaRejectUnsupportedKeys 验证不支持的 schema 关键字 fail-closed 报错。
+// TestSchemaRejectUnsupportedKeys fails closed on unsupported keywords.
 func TestSchemaRejectUnsupportedKeys(t *testing.T) {
-	// $ref 是常见但不支持的关键字
+	// $ref is common but unsupported.
 	if _, err := tools.Compile([]byte(`{"$ref": "#/definitions/x"}`)); err == nil {
 		t.Fatal("$ref 应被拒绝")
 	}
-	// 嵌套位置的不支持关键字也应被拒绝
+	// Reject unsupported keywords in nested schemas as well.
 	if _, err := tools.Compile([]byte(`{"type":"object","properties":{"a":{"allOf":[{"type":"string"}]}}}`)); err == nil {
 		t.Fatal("嵌套 allOf 应被拒绝")
 	}
-	// 非法 JSON
+	// Invalid JSON.
 	if _, err := tools.Compile([]byte(`{invalid`)); err == nil {
 		t.Fatal("非法 JSON 应报错")
 	}
-	// 结构自检：array 必须带 items
+	// An array schema requires items.
 	if _, err := tools.Compile([]byte(`{"type":"array"}`)); err == nil {
 		t.Fatal("array 缺 items 应报错")
 	}
 }
 
-// TestSchemaDefaultExamples 验证 default / examples 解析保留（不参与校验）。
+// TestSchemaDefaultExamples preserves defaults and examples without using them for validation.
 func TestSchemaDefaultExamples(t *testing.T) {
 	schema, err := tools.Compile([]byte(`{
 		"type": "string",
@@ -159,7 +159,7 @@ func TestSchemaDefaultExamples(t *testing.T) {
 	}
 }
 
-// TestSchemaInfer 验证 INFER（从 Go 值推断 schema）。
+// TestSchemaInfer infers a schema from Go values.
 func TestSchemaInfer(t *testing.T) {
 	type inner struct {
 		ID    int    `json:"id"`
@@ -178,11 +178,11 @@ func TestSchemaInfer(t *testing.T) {
 	if schema.Type != tools.TypeObject {
 		t.Fatalf("顶层应为 object: %v", schema.Type)
 	}
-	// required 只包含无 omitempty 的顶层字段（name/score/items，label 在 inner 中带 omitempty）
+	// Only top-level fields without omitempty are required: name, score, and items.
 	if len(schema.Required) != 3 {
 		t.Fatalf("顶层 required 应含 name/score/items: %v", schema.Required)
 	}
-	// 内层 inner 的 label 带 omitempty，不应出现在内层 required 中
+	// The nested label field has omitempty and must not be required.
 	innerSchema := schema.Properties["items"].Items
 	if len(innerSchema.Required) != 1 || innerSchema.Required[0] != "id" {
 		t.Fatalf("内层 required 应只含 id（label 有 omitempty）: %v", innerSchema.Required)
@@ -194,7 +194,7 @@ func TestSchemaInfer(t *testing.T) {
 		t.Fatal("内层 id 应为 integer")
 	}
 
-	// 推断结果可直接用于校验
+	// The inferred schema must validate input directly.
 	val := map[string]any{
 		"name":  "x",
 		"score": 1.5,
@@ -205,7 +205,7 @@ func TestSchemaInfer(t *testing.T) {
 	}
 }
 
-// TestSchemaMarshalDeterministic 验证 Marshal 输出确定性 + 字典序。
+// TestSchemaMarshalDeterministic verifies stable lexical serialization.
 func TestSchemaMarshalDeterministic(t *testing.T) {
 	schema, err := tools.Compile([]byte(`{
 		"type": "object",
@@ -231,15 +231,15 @@ func TestSchemaMarshalDeterministic(t *testing.T) {
 		t.Fatal("Marshal 输出不确定")
 	}
 
-	// properties 与 required 应字典序：直接检查序列化字节中 alpha 出现在 zeta 之前。
-	//（encoding/json 对 map 输出本身就是字典序，此处做字节级断言，避免依赖 Go map 迭代顺序。）
+	// Assert alpha precedes zeta in serialized properties and required fields, independent of Go map
+	// iteration order.
 	if bytes.Index(b1, []byte("alpha")) == -1 || bytes.Index(b1, []byte("zeta")) == -1 {
 		t.Fatalf("Marshal 输出缺少 alpha/zeta: %s", b1)
 	}
 	if bytes.Index(b1, []byte("alpha")) > bytes.Index(b1, []byte("zeta")) {
 		t.Fatalf("properties 应字典序(alpha 在 zeta 前): %s", b1)
 	}
-	// 再验证字典序稳定（多轮均一致）。
+	// Verify lexical ordering remains stable across repeated marshaling.
 	b3, _ := schema.Marshal()
 	if !bytes.Equal(b1, b3) {
 		t.Fatalf("Marshal 输出不确定:\n%s\nvs\n%s", b1, b3)

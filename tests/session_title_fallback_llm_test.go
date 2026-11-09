@@ -1,11 +1,6 @@
-// 本文件验证任务 S08：Session Title（latest-wins fold + fallback + LLM helper）。
-//
-// 覆盖场景：
-//   - Fallback：首条用户消息前缀 30 字截断（含多字节字符不切坏）；
-//   - LLM 未启用 → 强制走 fallback；
-//   - LLM 正常产出 → Source=llm，标题被采纳；
-//   - LLM 失败 / 产出为空 → 回退到 fallback，Source=fallback；
-//   - （可选）与 session 事件折叠联动：写入 session/title 后 FoldSessionTitle 能读出。
+// S08 session-title tests cover rune-safe 30-character fallback prefixes, fallback when LLM is
+// disabled/fails/returns empty text, adoption of valid generated titles, and latest-wins
+// session/title folding.
 package tests
 
 import (
@@ -24,9 +19,9 @@ import (
 // Mock LLMAdapter
 // ============================================================================
 
-// mockLLM 是可控的 LLMAdapter 双桩。
+// mockLLM is a configurable LLMAdapter test double.
 type mockLLM struct {
-	// text 每次 Chat 回放的文本流；为空则立即返回 err（模拟 LLM 失败）。
+	// Replay text on each Chat call; an empty value returns err immediately to simulate failure.
 	text string
 	err  error
 }
@@ -37,7 +32,7 @@ func (m *mockLLM) Chat(ctx context.Context, req llm.ChatRequest, cb func(llm.Str
 	if m.err != nil {
 		return llm.Usage{}, m.err
 	}
-	// 按字符流式回放，模拟 text 分片。
+	// Stream one character at a time to simulate text chunks.
 	for _, r := range m.text {
 		cb(llm.StreamChunk{Kind: llm.ChunkText, Text: string(r)})
 	}
@@ -45,27 +40,25 @@ func (m *mockLLM) Chat(ctx context.Context, req llm.ChatRequest, cb func(llm.Str
 	return llm.Usage{}, nil
 }
 
-// ============================================================================
-// 测试用例
-// ============================================================================
+// Test cases.
 
-// TestFallbackPrefix 验证 30 字前缀截断与多字节安全。
+// TestFallbackPrefix verifies 30-character truncation without splitting multibyte characters.
 func TestFallbackPrefix(t *testing.T) {
 	long := "这是一个非常长的用户消息，用来验证标题前缀会被截断到三十个字以内，后面的内容就不再出现在标题里了。"
 	got := sessiontitle.Fallback(long)
-	if len([]rune(got)) != 30 && len([]rune(got)) != 31 { // 30 字 + 可能的「…」
+	if len([]rune(got)) != 30 && len([]rune(got)) != 31 { // Thirty characters plus an optional ellipsis.
 		t.Fatalf("fallback 应截断到约 30 字(不含…计30字)，实际 %d 字(%q)", len([]rune(got)), got)
 	}
 	if !strings.HasSuffix(got, "…") {
 		t.Fatalf("超长输入应以省略号结尾，实际 %q", got)
 	}
-	// 多字节安全：截断点不得产生不合法的 UTF-8 序列。
+	// Truncation must preserve valid UTF-8.
 	if !isValidUTF8(got) {
 		t.Fatalf("fallback 输出包含非法 UTF-8: %q", got)
 	}
 }
 
-// TestFallbackShort 验证短消息原样保留（不追加省略号）。
+// TestFallbackShort preserves short messages without an ellipsis.
 func TestFallbackShort(t *testing.T) {
 	got := sessiontitle.Fallback("修复登录报错")
 	if got != "修复登录报错" {
@@ -73,16 +66,16 @@ func TestFallbackShort(t *testing.T) {
 	}
 }
 
-// TestFallbackEmpty 验证空内容返回空标题。
+// TestFallbackEmpty returns an empty title for empty content.
 func TestFallbackEmpty(t *testing.T) {
 	if got := sessiontitle.Fallback("   "); got != "" {
 		t.Fatalf("空白内容应返回空标题，实际 %q", got)
 	}
 }
 
-// TestNoLLMFallsBack 验证未启用 LLM 时强制走 fallback。
+// TestNoLLMFallsBack uses fallback when the LLM is disabled.
 func TestNoLLMFallsBack(t *testing.T) {
-	gen := &sessiontitle.Generator{} // LLM 为 nil
+	gen := &sessiontitle.Generator{} // No LLM configured.
 	res := gen.Generate(context.Background(), "请帮我部署一个 go 服务")
 	if res.Source != sessiontitle.SourceFallback {
 		t.Fatalf("无 LLM 时应 Source=fallback，实际 %v", res.Source)
@@ -92,14 +85,14 @@ func TestNoLLMFallsBack(t *testing.T) {
 	}
 }
 
-// TestLLMGenerated 验证 LLM 正常产出时标题被采纳。
+// TestLLMGenerated adopts a valid generated title.
 func TestLLMGenerated(t *testing.T) {
 	gen := &sessiontitle.Generator{LLM: &mockLLM{text: "【部署 Go 服务】"}}
 	res := gen.Generate(context.Background(), "请帮我部署一个 go 服务")
 	if res.Source != sessiontitle.SourceLLM {
 		t.Fatalf("LLM 成功时应 Source=llm，实际 %v", res.Source)
 	}
-	// 清理引号类符号后应为纯标题。
+	// Remove surrounding quotation marks to obtain the plain title.
 	if trimmed := sessiontitle.TrimTitle(res.Title); sessiontitle.TrimTitle(trimmed) == "" {
 		t.Fatalf("LLM 标题为空: %q", res.Title)
 	}
@@ -111,7 +104,7 @@ func TestLLMGenerated(t *testing.T) {
 	}
 }
 
-// TestLLMFailureFallsBack 验证 LLM 失败时回退到 fallback。
+// TestLLMFailureFallsBack uses fallback after an LLM failure.
 func TestLLMFailureFallsBack(t *testing.T) {
 	gen := &sessiontitle.Generator{LLM: &mockLLM{err: &llm.LlmFailure{Kind: llm.FailOverload, Message: "overloaded"}}}
 	res := gen.Generate(context.Background(), "请帮我部署一个 go 服务")
@@ -123,7 +116,7 @@ func TestLLMFailureFallsBack(t *testing.T) {
 	}
 }
 
-// TestLLMEmptyOutputFallsBack 验证 LLM 产出空串时回退到 fallback。
+// TestLLMEmptyOutputFallsBack uses fallback for empty LLM output.
 func TestLLMEmptyOutputFallsBack(t *testing.T) {
 	gen := &sessiontitle.Generator{LLM: &mockLLM{text: "  \n  "}}
 	res := gen.Generate(context.Background(), "帮我写测试用例")
@@ -135,10 +128,10 @@ func TestLLMEmptyOutputFallsBack(t *testing.T) {
 	}
 }
 
-// TestTitleEventFold 验证 session/title 事件写入后 FoldSessionTitle 能 latest-wins 读出。
+// TestTitleEventFold reads the latest session/title event.
 func TestTitleEventFold(t *testing.T) {
 	sl := session.NewSessionLog(brand.NewSessionID("title-s1"))
-	// 先写一个旧标题，再写新标题 → fold 取最新。
+	// Write an old title followed by a new one; folding must select the new title.
 	if _, err := sl.Append(session.SessionTitleData{Title: "旧标题"}); err != nil {
 		t.Fatalf("追加旧标题事件失败: %v", err)
 	}
@@ -151,7 +144,7 @@ func TestTitleEventFold(t *testing.T) {
 	}
 }
 
-// isValidUTF8 判断字符串是否为合法 UTF-8（用于校验截断未切坏多字节字符）。
+// isValidUTF8 verifies truncation has not split a multibyte character.
 func isValidUTF8(s string) bool {
 	return utf8.ValidString(s)
 }

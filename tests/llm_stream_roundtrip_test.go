@@ -1,4 +1,4 @@
-// 本文件对应任务 M07：LLM Provider 接缝 + 流式协议（SSE roundtrip + 失败分类）。
+// M07 LLM provider and streaming protocol tests: SSE round trips and failure classification.
 package tests
 
 import (
@@ -14,7 +14,7 @@ import (
 	"github.com/herlanai/omnix/pkg/llm/provider_deepseek"
 )
 
-// newDeepseekWithMock 构造基于 mock server 的 DeepSeek 适配器。
+// newDeepseekWithMock constructs a DeepSeek adapter backed by a mock server.
 func newDeepseekWithMock(t *testing.T, handler http.HandlerFunc) *provider_deepseek.DeepSeek {
 	t.Helper()
 	srv := httptest.NewServer(handler)
@@ -29,26 +29,26 @@ func newDeepseekWithMock(t *testing.T, handler http.HandlerFunc) *provider_deeps
 	)
 }
 
-// sseData 构造一条 SSE data 行。
+// sseData constructs one SSE data line.
 func sseData(obj string) string {
 	return "data: " + obj + "\n"
 }
 
-// TestLLMDeepseekSSERoundtrip 验证 reasoning + content + tool_call + usage 完整解析。
+// TestLLMDeepseekSSERoundtrip parses reasoning, text, tool calls, and usage.
 func TestLLMDeepseekSSERoundtrip(t *testing.T) {
 	adapter := newDeepseekWithMock(t, func(w http.ResponseWriter, r *http.Request) {
-		// 校验鉴权头
+		// Validate the authorization header.
 		if r.Header.Get("Authorization") != "Bearer sk-test" {
 			t.Errorf("Authorization 头异常: %q", r.Header.Get("Authorization"))
 		}
 		w.Header().Set("Content-Type", "text/event-stream")
-		// 推理块
+		// Reasoning chunk.
 		_, _ = w.Write([]byte(sseData(`{"choices":[{"delta":{"reasoning_content":"思考中"}}]}`)))
-		// 正文块
+		// Text chunk.
 		_, _ = w.Write([]byte(sseData(`{"choices":[{"delta":{"content":"你好"}}]}`)))
-		// 工具调用块
+		// Tool-call chunk.
 		_, _ = w.Write([]byte(sseData(`{"choices":[{"delta":{"tool_calls":[{"id":"call_1","type":"function","function":{"name":"bash","arguments":"{\"cmd\":\"ls\"}"}}]}}]}`)))
-		// usage 块
+		// Usage chunk.
 		_, _ = w.Write([]byte(sseData(`{"usage":{"prompt_tokens":10,"completion_tokens":5,"prompt_cache_hit_tokens":8,"prompt_cache_miss_tokens":2}}`)))
 		_, _ = w.Write([]byte("data: [DONE]\n"))
 	})
@@ -67,7 +67,7 @@ func TestLLMDeepseekSSERoundtrip(t *testing.T) {
 		t.Fatalf("Chat 失败: %v", err)
 	}
 
-	// 验证分片种类与内容
+	// Verify chunk kinds and contents.
 	if len(chunks) < 4 {
 		t.Fatalf("应至少 4 个分片(推理+正文+工具+done): %d", len(chunks))
 	}
@@ -87,7 +87,7 @@ func TestLLMDeepseekSSERoundtrip(t *testing.T) {
 		t.Fatalf("末分片应为 done: %+v", chunks[len(chunks)-1])
 	}
 
-	// 验证 usage 缓存命中字段
+	// Verify cache-hit usage fields.
 	if usage.PromptTokens != 10 || usage.CompletionTokens != 5 {
 		t.Fatalf("usage token 异常: %+v", usage)
 	}
@@ -96,7 +96,7 @@ func TestLLMDeepseekSSERoundtrip(t *testing.T) {
 	}
 }
 
-// TestLLMDeepseekFailureMapping 验证 HTTP 状态码 → LlmFailure 分类映射。
+// TestLLMDeepseekFailureMapping maps HTTP status codes to LlmFailure kinds.
 func TestLLMDeepseekFailureMapping(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -127,14 +127,14 @@ func TestLLMDeepseekFailureMapping(t *testing.T) {
 	}
 }
 
-// TestLLMDeepseekMissingKey 验证缺少 API Key 时返回 refusal 分类。
+// TestLLMDeepseekMissingKey verifies failure classification when the API key is missing.
 func TestLLMDeepseekMissingKey(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Fatal("不应发起真实请求")
 	}))
 	defer srv.Close()
 
-	store := credentials.NewMemoryStore() // 无 key
+	store := credentials.NewMemoryStore() // No key configured.
 	adapter := provider_deepseek.NewDeepSeek(store, provider_deepseek.WithBaseURL(srv.URL))
 
 	_, err := adapter.Chat(context.Background(), llm.ChatRequest{Model: "m"}, func(llm.StreamChunk) {})
@@ -146,7 +146,7 @@ func TestLLMDeepseekMissingKey(t *testing.T) {
 	}
 }
 
-// TestLLMAdapterInterface 验证 DeepSeek 适配器满足 LLMAdapter 接口。
+// TestLLMAdapterInterface verifies DeepSeek implements LLMAdapter.
 func TestLLMAdapterInterface(t *testing.T) {
 	var _ llm.LLMAdapter = (*provider_deepseek.DeepSeek)(nil)
 }

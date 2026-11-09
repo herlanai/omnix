@@ -1,7 +1,5 @@
-// 本文件验证任务 S05：Session Telemetry hooks。
-//
-// 覆盖三类钩子（事件追加 / 流式分片 / 工具执行）均触发 + latency 合理 + 单钩子
-// panic 不影响其余钩子与调用方。
+// S05 telemetry-hook tests cover event, chunk, and tool hooks, reasonable latency, and panic
+// isolation between hooks and callers.
 package tests
 
 import (
@@ -13,15 +11,15 @@ import (
 	"github.com/herlanai/omnix/pkg/telemetry"
 )
 
-// TestTelemetryThreeHooksFire 验证事件/分片/工具三类钩子都触发且 latency 非负。
+// TestTelemetryThreeHooksFire invokes all three hook kinds and verifies nonnegative latency.
 func TestTelemetryThreeHooksFire(t *testing.T) {
 	tm := telemetry.New()
 	ctx := context.Background()
 
 	var (
-		mu          sync.Mutex
+		mu                    sync.Mutex
 		events, chunks, tools int
-		latencies            []time.Duration
+		latencies             []time.Duration
 	)
 
 	tm.RegisterEventHook(func(_ context.Context, d telemetry.EventHookData) {
@@ -43,7 +41,7 @@ func TestTelemetryThreeHooksFire(t *testing.T) {
 		latencies = append(latencies, d.LatencyMS)
 	})
 
-	// 依次触发三类埋点。
+	// Trigger each instrumentation kind in sequence.
 	now := time.Now()
 	tm.RecordEvent(ctx, "user/message", now.Add(-2*time.Millisecond))
 	tm.RecordChunk(ctx, 1, 12, now.Add(-3*time.Millisecond))
@@ -57,7 +55,7 @@ func TestTelemetryThreeHooksFire(t *testing.T) {
 	if len(latencies) != 3 {
 		t.Fatalf("应收集 3 条 latency，实际 %d", len(latencies))
 	}
-	// latency 应处于合理区间（约等于注入的 2/3/5ms）。
+	// Latency should reflect the injected delays of approximately 2, 3, and 5 ms.
 	for i, l := range latencies {
 		if l < 0 {
 			t.Fatalf("latency[%d]=%v 不应为负", i, l)
@@ -68,7 +66,7 @@ func TestTelemetryThreeHooksFire(t *testing.T) {
 	}
 }
 
-// TestTelemetryToolOkFlag 验证工具钩子正确携带成功/失败标记。
+// TestTelemetryToolOkFlag propagates tool success and failure flags.
 func TestTelemetryToolOkFlag(t *testing.T) {
 	tm := telemetry.New()
 	ctx := context.Background()
@@ -82,27 +80,27 @@ func TestTelemetryToolOkFlag(t *testing.T) {
 	}
 }
 
-// TestTelemetryPanicIsolated 验证单个钩子 panic 不打断其余钩子与调用方。
+// TestTelemetryPanicIsolated prevents one hook panic from interrupting other hooks or callers.
 func TestTelemetryPanicIsolated(t *testing.T) {
 	tm := telemetry.New()
 	ctx := context.Background()
 	fired := 0
 
 	tm.RegisterEventHook(func(_ context.Context, _ telemetry.EventHookData) {
-		panic("boom") // 恶意钩子：直接 panic
+		panic("boom") // A deliberately faulty hook panics immediately.
 	})
 	tm.RegisterEventHook(func(_ context.Context, _ telemetry.EventHookData) {
 		fired++
 	})
 
-	// 不应崩溃。
+	// Must not crash.
 	tm.RecordEvent(ctx, "tool/bash", time.Now())
 	if fired != 1 {
 		t.Fatalf("panic 钩子后的正常钩子应仍被调用，实际 fired=%d", fired)
 	}
 }
 
-// TestTelemetryNoHooksNoPanic 验证无钩子时埋点安全（空集分发）。
+// TestTelemetryNoHooksNoPanic safely dispatches to an empty hook set.
 func TestTelemetryNoHooksNoPanic(t *testing.T) {
 	tm := telemetry.New()
 	ctx := context.Background()
@@ -110,14 +108,14 @@ func TestTelemetryNoHooksNoPanic(t *testing.T) {
 	tm.RecordEvent(ctx, "user/message", now)
 	tm.RecordChunk(ctx, 1, 10, now)
 	tm.RecordTool(ctx, "bash", true, now)
-	// 无钩子不应 panic 即可。
+	// No hooks must not cause a panic.
 }
 
-// TestTelemetryConcurrent 验证并发埋点/注册线程安全（race 检测）。
+// TestTelemetryConcurrent verifies concurrent registration and dispatch with the race detector.
 func TestTelemetryConcurrent(t *testing.T) {
 	tm := telemetry.New()
 	ctx := context.Background()
-	// 并发注册 + 埋点。
+	// Register and dispatch concurrently.
 	var wg sync.WaitGroup
 	for i := 0; i < 8; i++ {
 		wg.Add(1)

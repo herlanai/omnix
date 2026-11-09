@@ -1,11 +1,11 @@
-// seqrange.go 复刻官方 session 的序号区间无损编码：把严格递增的来源序号序列中
-// 连续 3 个及以上的段压缩成 [from,to] 闭区间，其余作为单点；解码时无损展开。
-// 用于 JSONL 存储里 sourceEventSeqs 数组的紧凑表示。
+// Sequence-range encoding follows upstream session semantics for compact
+// sourceEventSeqs storage. Strictly increasing runs of at least three values
+// become inclusive ranges; shorter runs remain singletons. Decoding is lossless.
 package session
 
 import "errors"
 
-// SeqRange 是一个闭区间；From == To 时表示单个序号。
+// SeqRange is inclusive; equal endpoints represent one sequence number.
 type SeqRange struct {
 	From int
 	To   int
@@ -20,7 +20,7 @@ func strictlyIncreasing(values []int) bool {
 	return true
 }
 
-// EncodeSeqRanges 把严格递增序号序列编码为区间列表；非严格递增时退化为单点序列。
+// EncodeSeqRanges compresses strictly increasing values, otherwise preserving them as singletons.
 func EncodeSeqRanges(values []int) []SeqRange {
 	if !strictlyIncreasing(values) {
 		out := make([]SeqRange, len(values))
@@ -47,26 +47,45 @@ func EncodeSeqRanges(values []int) []SeqRange {
 	return out
 }
 
-// DecodeSeqRanges 把区间列表无损展开为序号序列，maxEntries 为最大条目数（<=0 不限）。
+// DecodeSeqRanges expands ranges losslessly; maxEntries <= 0 disables the entry limit.
 func DecodeSeqRanges(ranges []SeqRange, maxEntries int) ([]int, error) {
-	var out []int
+	total := 0
 	hadRange := false
+	maxInt := int(^uint(0) >> 1)
 	for _, r := range ranges {
 		if r.From < 0 || r.To < r.From {
 			return nil, errors.New("invalid seq range")
 		}
-		if r.To > r.From {
-			hadRange = true
+		span := r.To - r.From
+		hadRange = hadRange || span > 0
+		// Compare before adding one so an inclusive range cannot overflow int.
+		if maxEntries > 0 && span >= maxEntries-total {
+			return nil, errors.New("seq ranges exceed max entries")
 		}
-		for v := r.From; v <= r.To; v++ {
-			if maxEntries > 0 && len(out) >= maxEntries {
-				return nil, errors.New("seq ranges exceed max entries")
+		if span >= maxInt-total {
+			return nil, errors.New("seq ranges exceed integer capacity")
+		}
+		total += span + 1
+	}
+	if hadRange {
+		for i := 1; i < len(ranges); i++ {
+			if ranges[i].From <= ranges[i-1].To {
+				return nil, errors.New("decoded seq ranges must be strictly increasing")
 			}
-			out = append(out, v)
 		}
 	}
-	if hadRange && !strictlyIncreasing(out) {
-		return nil, errors.New("decoded seq ranges must be strictly increasing")
+	if total == 0 {
+		return nil, nil
+	}
+	out := make([]int, total)
+	index := 0
+	for _, r := range ranges {
+		count := r.To - r.From + 1
+		// Count offsets instead of incrementing the endpoint, which may be MaxInt.
+		for offset := 0; offset < count; offset++ {
+			out[index+offset] = r.From + offset
+		}
+		index += count
 	}
 	return out, nil
 }

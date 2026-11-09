@@ -39,8 +39,8 @@ complete → （终态，无出边）
 ## 在 omnix 中
 
 ```go
-ts := goal.NewGoalToolset(sl) // 绑定到会话日志
-// 6 个工具：goal_list / goal_set_phase / goal_set_description
+ts := goal.NewGoalToolset(sl) // Bind to the session log.
+// Six tools, including goal_list, goal_set_phase, and goal_set_description.
 //          / goal_set_max_rounds / goal_add_blocker / goal_report_blocker
 ```
 

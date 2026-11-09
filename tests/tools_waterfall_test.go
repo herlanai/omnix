@@ -1,4 +1,4 @@
-// 本文件对应任务 M23：Tool Execution 四级 Waterfall 链。
+// M23 four-stage tool execution waterfall tests.
 package tests
 
 import (
@@ -12,7 +12,7 @@ import (
 	"github.com/herlanai/omnix/pkg/waterfall"
 )
 
-// makeEchoTool 构造一个返回入参的 echo 工具。
+// makeEchoTool constructs a tool that returns its input.
 func makeEchoTool() *tools.Tool {
 	return &tools.Tool{
 		Name:        "echo",
@@ -23,13 +23,13 @@ func makeEchoTool() *tools.Tool {
 	}
 }
 
-// TestToolPipelinePreDeny 验证 pre-execute 级 deny：工具不执行且结果 isError。
+// TestToolPipelinePreDeny skips execution and returns isError after pre-execution denial.
 func TestToolPipelinePreDeny(t *testing.T) {
 	p := tools.NewPipeline().
 		UsePre(func(ec *tools.ExecContext, next waterfall.NextFunc) error {
 			if ec.Request.Input["danger"] == true {
 				ec.Denied = true
-				return nil // 不调用 next → 短路
+				return nil // Omitting next short-circuits the chain.
 			}
 			return next()
 		}).
@@ -52,11 +52,11 @@ func TestToolPipelinePreDeny(t *testing.T) {
 	}
 }
 
-// TestToolPipelinePreRewrite 验证 pre-execute 级换参（改写输入并传递）。
+// TestToolPipelinePreRewrite changes input before execution.
 func TestToolPipelinePreRewrite(t *testing.T) {
 	p := tools.NewPipeline().
 		UsePre(func(ec *tools.ExecContext, next waterfall.NextFunc) error {
-			// 换参：把 msg 从 secret 替换为 masked
+			// Replace the secret message with masked text.
 			if v, ok := ec.Request.Input["msg"].(string); ok && v == "secret" {
 				ec.Request.Input["msg"] = "masked"
 			}
@@ -79,7 +79,7 @@ func TestToolPipelinePreRewrite(t *testing.T) {
 	}
 }
 
-// TestToolPipelineExecuteError 验证工具返回错误 → 结果 isError。
+// TestToolPipelineExecuteError converts tool errors into isError results.
 func TestToolPipelineExecuteError(t *testing.T) {
 	failing := &tools.Tool{
 		Name: "fail",
@@ -96,16 +96,16 @@ func TestToolPipelineExecuteError(t *testing.T) {
 	}
 }
 
-// TestToolPipelineSignalCancel 验证 execute 中换 signal=cancel → 结果 isError。
+// TestToolPipelineSignalCancel returns isError when execution changes the signal to cancel.
 func TestToolPipelineSignalCancel(t *testing.T) {
 	p := tools.NewPipeline().
 		UseExecute(func(ec *tools.ExecContext, next waterfall.NextFunc) error {
-			// 在调用真实工具前把 signal 换成 cancel
+			// Set the cancel signal before invoking the real tool.
 			ec.Signal = tools.SignalCancel
 			return next()
 		}).
 		UsePost(func(ec *tools.ExecContext, next waterfall.NextFunc) error {
-			// post 级检测到 cancel 后 block
+			// The post stage detects cancellation and blocks the result.
 			if ec.Signal == tools.SignalCancel {
 				ec.Denied = true
 				return next()
@@ -121,7 +121,7 @@ func TestToolPipelineSignalCancel(t *testing.T) {
 	}
 }
 
-// TestToolPipelinePostMeta 验证 post-execute 级加 meta（附加元数据）。
+// TestToolPipelinePostMeta adds metadata after execution.
 func TestToolPipelinePostMeta(t *testing.T) {
 	p := tools.NewPipeline().
 		UsePost(func(ec *tools.ExecContext, next waterfall.NextFunc) error {
@@ -132,11 +132,11 @@ func TestToolPipelinePostMeta(t *testing.T) {
 
 	req := &tools.ToolCallRequest{CallID: brand.NewToolCallID("c5"), Tool: "echo", Input: map[string]any{"msg": "hi"}}
 	res := p.Run(context.Background(), req, nil)
-	// result 阶段应能从 Meta 读到附加信息
+	// The result stage must see the added metadata.
 	_ = res
 }
 
-// TestToolPipelinePostTruncate 验证 post-execute 级截断输出。
+// TestToolPipelinePostTruncate truncates output after execution.
 func TestToolPipelinePostTruncate(t *testing.T) {
 	longTool := &tools.Tool{
 		Name: "long",
@@ -160,7 +160,7 @@ func TestToolPipelinePostTruncate(t *testing.T) {
 	}
 }
 
-// TestToolPipelineResultPhase 验证 result 级最终加工可读取 Meta 并改写结果。
+// TestToolPipelineResultPhase reads metadata and rewrites the final result.
 func TestToolPipelineResultPhase(t *testing.T) {
 	p := tools.NewPipeline().
 		UsePost(func(ec *tools.ExecContext, next waterfall.NextFunc) error {
@@ -183,7 +183,7 @@ func TestToolPipelineResultPhase(t *testing.T) {
 	}
 }
 
-// TestToolPipelineAllPhases 验证四级全部参与时顺序执行且结果正确。
+// TestToolPipelineAllPhases verifies ordering and output across all four stages.
 func TestToolPipelineAllPhases(t *testing.T) {
 	var order []string
 	record := func(name string) waterfall.Handler[tools.ExecContext] {

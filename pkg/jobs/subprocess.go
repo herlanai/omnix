@@ -1,4 +1,4 @@
-// 提供基于 pkg/subprocess 的任务实现：Bash 等长任务作为后台 Job 运行。
+// Subprocess-backed jobs run long tasks such as Bash in the background.
 package jobs
 
 import (
@@ -6,27 +6,27 @@ import (
 	"github.com/herlanai/omnix/pkg/subprocess"
 )
 
-// SubprocessSpec 是使用子进程后端启动任务所需的规格。
+// SubprocessSpec configures a subprocess-backed job.
 type SubprocessSpec struct {
-	// Kind 任务类型（缺省 bash）。
+	// Kind defaults to bash.
 	Kind JobKind
-	// Label 一行模型向标签（命令）。
+	// Label is a single-line model-facing command label.
 	Label string
-	// OwnerSession owner 会话 id（M46 绑定）。
+	// OwnerSession binds the job to its owner (M46).
 	OwnerSession brand.SessionID
-	// Argv 可执行与参数（绝不做 shell 解释）。
+	// Argv contains the executable and arguments without shell interpretation.
 	Argv []string
-	// Cwd 工作目录。
+	// Cwd is the working directory.
 	Cwd string
-	// StdoutMaxBytes 内存输出上限（截断前）。
+	// StdoutMaxBytes limits in-memory output before truncation.
 	StdoutMaxBytes int
-	// SpillRoot spill 根（超限时写完整流）。
+	// SpillRoot stores complete streams when the limit is exceeded.
 	SpillRoot string
-	// GraceMs 终止宽限。
+	// GraceMs is the termination grace period.
 	GraceMs int
 }
 
-// StartSubprocess 在 runtime 上启动一个子进程后端任务。
+// StartSubprocess starts a subprocess-backed job on the runtime.
 func (r *Runtime) StartSubprocess(spec SubprocessSpec) (*Job, error) {
 	kind := spec.Kind
 	if kind == "" {
@@ -46,7 +46,7 @@ func (r *Runtime) StartSubprocess(spec SubprocessSpec) (*Job, error) {
 		OwnerSession: spec.OwnerSession,
 		Run: func() *JobHooks {
 			return &JobHooks{
-				// cancel：树终止，孤儿进程清理（M46）。
+				// Cancel the process tree and clean up orphans (M46).
 				Cancel: func(reason string) { handle.Terminate() },
 				Done:   translateDone(handle),
 				ReadOutput: func() string {
@@ -57,7 +57,7 @@ func (r *Runtime) StartSubprocess(spec SubprocessSpec) (*Job, error) {
 	})
 }
 
-// translateDone 把子进程退出事实映射为 JobOutcome。
+// translateDone maps subprocess exit facts to JobOutcome.
 func translateDone(handle *subprocess.SubprocessHandle) chan JobOutcome {
 	ch := make(chan JobOutcome, 1)
 	go func() {

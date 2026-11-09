@@ -1,4 +1,4 @@
-// 本文件对应任务 M04：Session 事件溯源 & 45+ 词汇表（round-trip 一致性）。
+// M04 event-sourcing vocabulary round-trip tests for at least 45 event types.
 package tests
 
 import (
@@ -10,12 +10,12 @@ import (
 	"github.com/herlanai/omnix/pkg/session"
 )
 
-// fixedTestTime 返回固定测试时间（保证 round-trip 确定性）。
+// fixedTestTime returns a fixed timestamp for deterministic round trips.
 func fixedTestTime() time.Time {
 	return time.Date(2026, 8, 31, 12, 0, 0, 0, time.UTC)
 }
 
-// sampleDataFor 为每种事件类型构造一份带代表字段值的样本数据。
+// sampleDataFor supplies representative typed data for each event kind.
 func sampleDataFor(t session.EventType) session.EventData {
 	switch t {
 	case session.EventTurnStart:
@@ -135,9 +135,9 @@ func sampleDataFor(t session.EventType) session.EventData {
 	}
 }
 
-// TestSessionEventVocabRoundTrip 验证 45+ 事件类型全部可序列化/反序列化 round-trip 一致。
+// TestSessionEventVocabRoundTrip serializes and deserializes every event type consistently.
 func TestSessionEventVocabRoundTrip(t *testing.T) {
-	// 词汇表必须达到 45+ 的要求
+	// The vocabulary must contain at least 45 event types.
 	if len(session.AllEventTypes) < 45 {
 		t.Fatalf("事件词汇表仅 %d 种，未达 45+ 要求", len(session.AllEventTypes))
 	}
@@ -172,7 +172,7 @@ func TestSessionEventVocabRoundTrip(t *testing.T) {
 	}
 }
 
-// TestSessionEventUnknownTypeRejected 验证未知事件类型 fail-closed 拒绝。
+// TestSessionEventUnknownTypeRejected fails closed on unknown event types.
 func TestSessionEventUnknownTypeRejected(t *testing.T) {
 	raw := `{"seq":1,"time":"2026-08-31T00:00:00Z","type":"bogus/type","data":{}}`
 	var ev session.SessionEvent

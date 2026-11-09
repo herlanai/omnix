@@ -1,4 +1,4 @@
-// Package tests 的 schedule 进程内调度验收测试。
+// In-process scheduler tests.
 package tests
 
 import (
@@ -22,7 +22,7 @@ func TestScheduleAfterFires(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("after timer did not fire")
 	}
-	// 一次性触发后移除。
+	// Remove a one-shot schedule after it fires.
 	if len(s.List()) != 0 {
 		t.Fatal("one-shot entry removed after dispatch")
 	}

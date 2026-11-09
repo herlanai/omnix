@@ -27,7 +27,7 @@ weight: 43
 
 ```go
 base := &presets.AgentPreset{ /* 基础能力 */ }
-web := presets.ComposeFrom("web", base, extraPreset) // 在 base 之上叠加
+web := presets.ComposeFrom("web", base, extraPreset) // Layer over the base configuration.
 reg := presets.NewPresetRegistry()
 reg.Mount(web)
 p, ok := reg.Select("web")
@@ -49,7 +49,7 @@ scope := settings.NewSettingsNamespace("agent")
 ss := settings.NewSettingsScope(scope)
 _ = ss.ApplyHost("llm.temperature", 0.3)
 raw, ok := ss.Get("llm.temperature")
-tree := ss.Describe(true) // redactSecrets=true，密钥路径脱敏
+tree := ss.Describe(true) // redactSecrets=true masks secret paths.
 ```
 
 ### Revision 乐观并发

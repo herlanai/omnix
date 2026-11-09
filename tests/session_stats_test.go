@@ -1,4 +1,4 @@
-// Package tests 的 session-stats 耗时统计验收测试。
+// Session duration-statistics tests.
 package tests
 
 import (
@@ -24,7 +24,7 @@ func TestStatsCollectorStep(t *testing.T) {
 
 func TestStatsCollectorTurnDedup(t *testing.T) {
 	c := telemetry.NewStatsCollector()
-	// 同一 turn 两个 step，turns 只计一次。
+	// Two steps in one turn count as only one turn.
 	c.StepEnd(0)
 	c.StepEnd(0)
 	c.StepEnd(1)
@@ -37,7 +37,7 @@ func TestStatsCollectorTool(t *testing.T) {
 	c := telemetry.NewStatsCollector()
 	c.ToolCall("id1", 0)
 	c.ToolResult("id1", 250)
-	// 无对应 call 的 result 忽略。
+	// Ignore results without a matching call.
 	c.ToolResult("nope", 999)
 	if s := c.Snapshot(); s.ToolMs != 250 {
 		t.Fatalf("tool = %+v", s)

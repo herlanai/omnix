@@ -1,8 +1,8 @@
-# omnix 文档站 Hugo 配置（Hextra 主题）
-# 构建产物发布到 GitHub Pages: https://JopenChen.github.io/omnix/
+# omnix Hugo documentation configuration using Hextra.
+# Publish build output to GitHub Pages: https://JopenChen.github.io/omnix/
 
 # ============================================================================
-# 站点基础
+# Site basics.
 # ============================================================================
 baseURL: https://JopenChen.github.io/omnix/
 title: "omnix"
@@ -14,7 +14,7 @@ enableGitInfo: true
 canonifyURLs: true
 
 # ============================================================================
-# 多语言（含每语言顶部导航菜单）
+# Languages and per-language navigation menus.
 # ============================================================================
 languages:
   en:
@@ -65,19 +65,19 @@ languages:
           weight: 5
 
 # ============================================================================
-# 内容
+# Content.
 # ============================================================================
-# 目录结构即侧边导航（leaf bundle 组织）
+# The leaf-bundle directory structure defines sidebar navigation.
 disableKinds:
   - taxonomy
   - term
   - rss
 
 # ============================================================================
-# 参数（Hextra 特有）
+# Hextra-specific parameters.
 # ============================================================================
 params:
-  # 导航栏（logo 用 AI 融合 README 角色生成的品牌图标）
+  # Navigation logo: an AI-generated brand icon based on the README character.
   navbar:
     logo:
       path: "img/omnix-icon.jpg"
@@ -88,33 +88,33 @@ params:
     displayLogo: true
     displayTitle: true
 
-  # 主题外观（默认暗色，DeepSeek Harness 玻璃拟态风格）
+  # Default dark appearance inspired by DeepSeek Harness glass styling.
   theme:
     default: dark
     displayToggle: true
 
-  # 搜索（Hextra 内置全文搜索）
+  # Hextra built-in full-text search.
   search:
     enable: true
     type: flexsearch
 
-  # 页脚
+  # Footer.
   footer:
     displayPoweredBy: false
     displayCopyright: true
     copyright: "© 2026 omnix — DeepSeek Harness Agent 的 Go 参考实现"
 
-  # 编辑链接（跳到 GitHub 源文件）
+  # Edit links to GitHub source files.
   editURL:
     enable: true
     base: "https://github.com/herlanai/omnix/edit/master/site/content"
 
-  # 代码高亮
+  # Syntax highlighting.
   highlight:
     default: true
 
 # ============================================================================
-# 代码高亮（Go 语法等）
+# Syntax highlighting, including Go.
 # ============================================================================
 markup:
   highlight:
@@ -123,4 +123,4 @@ markup:
     lineNumbersInTable: false
   goldmark:
     renderer:
-      unsafe: true # 允许内容里写原生 HTML（如示例表格）
+      unsafe: true # Allow raw HTML in content, such as example tables.

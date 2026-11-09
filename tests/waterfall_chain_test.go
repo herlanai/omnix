@@ -1,4 +1,4 @@
-// 本文件对应任务 M02：Waterfall 中间件链原语。
+// M02 waterfall middleware primitives.
 package tests
 
 import (
@@ -11,14 +11,14 @@ import (
 	"github.com/herlanai/omnix/pkg/waterfall"
 )
 
-// testPayload 模拟一条被各级中间件传递与改写的载荷。
+// testPayload is passed through and rewritten by middleware stages.
 type testPayload struct {
-	seq     []string // 记录各级进入/离开顺序
-	msg     string   // 可被中间件改写的文本
-	blocked bool     // 是否被拦截
+	seq     []string // Record middleware entry and exit order.
+	msg     string   // Text that middleware may rewrite.
+	blocked bool     // Whether execution was intercepted.
 }
 
-// TestWaterfallOrdering 验证多级中间件严格按注册顺序调用（洋葱进入/离开）。
+// TestWaterfallOrdering verifies registration-order entry and reverse-order exit.
 func TestWaterfallOrdering(t *testing.T) {
 	p := &testPayload{seq: []string{}}
 
@@ -53,7 +53,7 @@ func TestWaterfallOrdering(t *testing.T) {
 	}
 }
 
-// TestWaterfallShortCircuit 验证中间件不调用 next() 时短路终止。
+// TestWaterfallShortCircuit stops when middleware omits next.
 func TestWaterfallShortCircuit(t *testing.T) {
 	var entered int32
 	p := &testPayload{seq: []string{}}
@@ -61,7 +61,7 @@ func TestWaterfallShortCircuit(t *testing.T) {
 	chain := waterfall.New[testPayload](
 		func(p *testPayload, next waterfall.NextFunc) error {
 			p.seq = append(p.seq, "guard")
-			// 不调用 next() → 短路
+			// Omitting next short-circuits execution.
 			return nil
 		},
 		func(p *testPayload, next waterfall.NextFunc) error {
@@ -81,7 +81,7 @@ func TestWaterfallShortCircuit(t *testing.T) {
 	}
 }
 
-// TestWaterfallPayloadRewrite 验证 payload 可被任一中间件改写并传递到下一级。
+// TestWaterfallPayloadRewrite passes rewritten payloads to downstream middleware.
 func TestWaterfallPayloadRewrite(t *testing.T) {
 	p := &testPayload{msg: "initial"}
 
@@ -108,7 +108,7 @@ func TestWaterfallPayloadRewrite(t *testing.T) {
 	}
 }
 
-// TestWaterfallErrorPropagation 验证中间件返回 error 时链立即终止并传播错误。
+// TestWaterfallErrorPropagation stops and propagates middleware errors.
 func TestWaterfallErrorPropagation(t *testing.T) {
 	var after int32
 	boom := errors.New("boom")
@@ -119,7 +119,7 @@ func TestWaterfallErrorPropagation(t *testing.T) {
 			return next()
 		},
 		func(p *testPayload, next waterfall.NextFunc) error {
-			return boom // 第二个中间件直接报错
+			return boom // The second middleware returns an error immediately.
 		},
 		func(p *testPayload, next waterfall.NextFunc) error {
 			atomic.AddInt32(&after, 1)
@@ -136,14 +136,14 @@ func TestWaterfallErrorPropagation(t *testing.T) {
 	}
 }
 
-// TestWaterfallNextSingleCall 验证同一中间件内重复调用 next() 触发 panic 保护。
+// TestWaterfallNextSingleCall panics if one middleware invokes next twice.
 func TestWaterfallNextSingleCall(t *testing.T) {
 	p := &testPayload{}
 
 	chain := waterfall.New[testPayload](
 		func(p *testPayload, next waterfall.NextFunc) error {
 			_ = next()
-			// 第二次调用应 panic
+			// The second call must panic.
 			_ = next()
 			return nil
 		},
@@ -157,7 +157,7 @@ func TestWaterfallNextSingleCall(t *testing.T) {
 	_ = chain.Run(context.Background(), p)
 }
 
-// TestWaterfallDownstreamErrorToUpstream 验证中间件可捕获/改写下游错误。
+// TestWaterfallDownstreamErrorToUpstream lets middleware catch and replace downstream errors.
 func TestWaterfallDownstreamErrorToUpstream(t *testing.T) {
 	p := &testPayload{}
 
@@ -165,7 +165,7 @@ func TestWaterfallDownstreamErrorToUpstream(t *testing.T) {
 		func(p *testPayload, next waterfall.NextFunc) error {
 			err := next()
 			if err != nil {
-				// 吞掉下游错误并改写
+				// Consume the downstream error and replace it.
 				return errors.New("wrapped: " + err.Error())
 			}
 			return nil
@@ -181,7 +181,7 @@ func TestWaterfallDownstreamErrorToUpstream(t *testing.T) {
 	}
 }
 
-// TestWaterfallEmptyChain 验证空链直接返回 nil。
+// TestWaterfallEmptyChain returns nil for an empty chain.
 func TestWaterfallEmptyChain(t *testing.T) {
 	chain := waterfall.New[testPayload]()
 	if err := chain.Run(context.Background(), &testPayload{}); err != nil {
@@ -189,7 +189,7 @@ func TestWaterfallEmptyChain(t *testing.T) {
 	}
 }
 
-// TestWaterfallTypedPayloads 验证泛型可承载任意载荷类型（不同中间件链互不干扰）。
+// TestWaterfallTypedPayloads verifies independent generic chains with different payload types.
 func TestWaterfallTypedPayloads(t *testing.T) {
 	type request struct{ url string }
 	type approval struct{ ok bool }

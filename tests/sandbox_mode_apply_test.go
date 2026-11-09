@@ -1,11 +1,6 @@
-// Package tests 的沙箱接缝（M26）验收测试。
-//
-// 覆盖：
-//   - 同一会话下 Bash 与 FS 两个消费者 resolve 得到一致 ExecutionPolicy（enforced + scope）
-//   - 模式优先级（显式覆盖 > 会话 override > 部署默认）
-//   - workspaceRoot 规范化与根回落
-//   - danger 模式绕过、受约束模式降级
-//   - Provider fail-closed（SANDBOX_UNAVAILABLE）
+// M26 sandbox tests cover matching Bash/FS policies, explicit/session/default precedence, root
+// normalization and fallback, danger-mode bypass, conversion to confined policies, and fail-closed
+// SANDBOX_UNAVAILABLE behavior.
 package tests
 
 import (
@@ -15,7 +10,7 @@ import (
 	"github.com/herlanai/omnix/pkg/sandbox"
 )
 
-// fakeSession 是 sandbox.Session 的测试桩。
+// fakeSession implements sandbox.Session for tests.
 type fakeSession struct {
 	id   string
 	cwd  string
@@ -29,16 +24,17 @@ func (f *fakeSession) SandboxMode() (sandbox.SandboxMode, bool) {
 	return f.mode, f.has
 }
 
-// TestSandboxBothConsumersConsistentPolicy 验证同一会话下 Bash 与 FS 解析到一致策略。
+// TestSandboxBothConsumersConsistentPolicy resolves identical Bash and FS policies for one
+// session.
 func TestSandboxBothConsumersConsistentPolicy(t *testing.T) {
 	svc := sandbox.NewPolicyService(sandbox.ModeReadOnly, "/fallback")
 	sess := &fakeSession{id: "s1", cwd: t.TempDir(), mode: sandbox.ModeWorkspaceWrite, has: true}
 
-	// 两个消费者（Bash / FS）各自调用 Resolve 得到策略。
+	// Resolve the policy independently for Bash and FS.
 	bashPolicy := svc.Resolve(sandbox.SandboxPolicyRequest{Session: sess})
 	fsPolicy := svc.Resolve(sandbox.SandboxPolicyRequest{Session: sess})
 
-	// 一致（enforced + scope）：模式与 workspace 边界完全相等。
+	// Mode, enforcement, and workspace boundaries must match.
 	if bashPolicy.Mode != fsPolicy.Mode || bashPolicy.WorkspaceRoot != fsPolicy.WorkspaceRoot {
 		t.Fatalf("Bash/FS 策略不一致: bash=%+v fs=%+v", bashPolicy, fsPolicy)
 	}
@@ -53,17 +49,17 @@ func TestSandboxBothConsumersConsistentPolicy(t *testing.T) {
 	}
 }
 
-// TestSandboxModePrecedence 验证模式优先级：显式 > 会话 > 默认。
+// TestSandboxModePrecedence verifies explicit > session > default precedence.
 func TestSandboxModePrecedence(t *testing.T) {
 	svc := sandbox.NewPolicyService(sandbox.ModeReadOnly, "/root")
 
-	// 无会话、无覆盖 → 部署默认。
+	// Without a session or override, use the deployment default.
 	p := svc.Resolve(sandbox.SandboxPolicyRequest{})
 	if p.Mode != sandbox.ModeReadOnly {
 		t.Fatalf("无输入应回落默认 read-only, 实际 %s", p.Mode)
 	}
 
-	// 会话 override 覆盖默认。
+	// A session override takes precedence over the default.
 	sess := &fakeSession{id: "s", cwd: "/ws", mode: sandbox.ModeDangerFullAccess, has: true}
 	p = svc.Resolve(sandbox.SandboxPolicyRequest{Session: sess})
 	if p.Mode != sandbox.ModeDangerFullAccess {
@@ -73,7 +69,7 @@ func TestSandboxModePrecedence(t *testing.T) {
 		t.Fatal("IsDanger() 应为 true")
 	}
 
-	// 显式覆盖最终胜出。
+	// An explicit override wins over both.
 	explicit := sandbox.ModeWorkspaceWrite
 	p = svc.Resolve(sandbox.SandboxPolicyRequest{Session: sess, Mode: &explicit})
 	if p.Mode != sandbox.ModeWorkspaceWrite {
@@ -81,15 +77,15 @@ func TestSandboxModePrecedence(t *testing.T) {
 	}
 }
 
-// TestSandboxWorkspaceRootFallback 验证根回落与规范化。
+// TestSandboxWorkspaceRootFallback verifies root fallback and normalization.
 func TestSandboxWorkspaceRootFallback(t *testing.T) {
 	svc := sandbox.NewPolicyService(sandbox.ModeWorkspaceWrite, "/fallback")
-	// 无 cwd 会话 → 回落根。
+	// Without a session working directory, use the fallback root.
 	p := svc.Resolve(sandbox.SandboxPolicyRequest{})
 	if p.WorkspaceRoot == "" || p.WorkspaceRoot != svc.Resolve(sandbox.SandboxPolicyRequest{}).WorkspaceRoot {
 		t.Fatalf("回落根异常: %q", p.WorkspaceRoot)
 	}
-	// cwd 规范化。
+	// Normalize the working directory.
 	sess := &fakeSession{id: "s", cwd: "relative/x"}
 	p = svc.Resolve(sandbox.SandboxPolicyRequest{Session: sess})
 	if p.WorkspaceRoot == "relative/x" {
@@ -97,7 +93,7 @@ func TestSandboxWorkspaceRootFallback(t *testing.T) {
 	}
 }
 
-// TestSandboxToConfined 验证 danger 之外的策略可降级为受约束策略；danger 拒绝降级。
+// TestSandboxToConfined converts non-danger policies and rejects danger-mode conversion.
 func TestSandboxToConfined(t *testing.T) {
 	base := sandbox.SandboxExecutionPolicy{
 		Mode:          sandbox.ModeWorkspaceWrite,
@@ -110,7 +106,7 @@ func TestSandboxToConfined(t *testing.T) {
 	if confined.Mode != sandbox.ConfinedWorkspaceWrite {
 		t.Fatalf("降级模式应为 workspace-write, 实际 %s", confined.Mode)
 	}
-	// danger 不可降级
+	// Danger mode cannot be converted to a confined policy.
 	danger := base
 	danger.Mode = sandbox.ModeDangerFullAccess
 	if _, err := danger.ToConfined(); err == nil {
@@ -118,7 +114,7 @@ func TestSandboxToConfined(t *testing.T) {
 	}
 }
 
-// TestSandboxProviderFailClosed 验证无后端时 confine 必须 fail-closed。
+// TestSandboxProviderFailClosed rejects confinement without an available backend.
 func TestSandboxProviderFailClosed(t *testing.T) {
 	prov := &sandbox.UnavailableProvider{}
 	_, err := prov.Confine(nil, sandbox.SandboxPolicy{})
@@ -130,18 +126,19 @@ func TestSandboxProviderFailClosed(t *testing.T) {
 	}
 }
 
-// TestSandboxRunnerFailureRule 验证 runner 失败证据规则（退出码门控 + info 行排除 + 致命签名）。
+// TestSandboxRunnerFailureRule verifies exit-code gating, informational-line exclusion, and fatal
+// signatures.
 func TestSandboxRunnerFailureRule(t *testing.T) {
 	rule := sandbox.RunnerFailureRule{
 		AllowedExitCodes:   []int{125},
 		FatalSignatures:    []string{"cannot start sandbox runner", "exec format error"},
 		InformationalLines: []string{"landlock: fallback to baseline"},
 	}
-	// 退出码不匹配 → 不判定失败。
+	// A nonmatching exit code must not classify as a sandbox failure.
 	if _, ok := rule.Matches(1, "boom"); ok {
 		t.Fatal("退出码 1 不在白名单，不应判定失败")
 	}
-	// 匹配 exitCode=125 + 致命签名行（info 行被排除）。
+	// Exit code 125 plus a fatal signature matches; informational lines are excluded.
 	stderr := "landlock: fallback to baseline\ncannot start sandbox runner: permission denied\n"
 	sig, ok := rule.Matches(125, stderr)
 	if !ok {

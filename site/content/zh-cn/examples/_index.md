@@ -9,10 +9,10 @@ weight: 4
 ## 运行方式
 
 ```bash
-# 教学入口（推荐先跑这个）
+# Recommended tutorial entry point.
 go run ./examples/tutorial
 
-# 其余示例
+# Additional examples.
 go run ./examples/agent_loop
 go run ./examples/usage
 go run ./examples/todo

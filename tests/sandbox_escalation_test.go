@@ -1,12 +1,5 @@
-// Package tests 的沙箱升级机制（Escalation）验收测试。
-//
-// 覆盖：
-//   - WIDER_MODES 严格更宽阶梯表
-//   - ESCALATION_TARGETS 封闭目标词汇
-//   - ValidateEscalationArgs 参数成对校验
-//   - SandboxDenialMarker 拒绝标记
-//   - EscalationHintMarker 升级提示标记
-//   - ApproveEscalation 核心流程：严格更宽检查 → 审批通道 → 结果映射
+// Sandbox escalation tests cover strictly wider modes, closed target vocabulary, paired argument
+// validation, denial and escalation markers, and approval-result mapping after width validation.
 package tests
 
 import (
@@ -17,20 +10,20 @@ import (
 	"github.com/herlanai/omnix/pkg/sandbox"
 )
 
-// TestWiderModes 验证严格更宽阶梯表。
+// TestWiderModes verifies the strictly wider mode hierarchy.
 func TestWiderModes(t *testing.T) {
-	// read-only 可以升级到 workspace-write 和 danger-full-access
+	// read-only can escalate to workspace-write or danger-full-access.
 	if !sandbox.CanEscalateTo(sandbox.ModeReadOnly, sandbox.ModeWorkspaceWrite) {
 		t.Fatal("read-only 应可升级到 workspace-write")
 	}
 	if !sandbox.CanEscalateTo(sandbox.ModeReadOnly, sandbox.ModeDangerFullAccess) {
 		t.Fatal("read-only 应可升级到 danger-full-access")
 	}
-	// workspace-write 只能升级到 danger-full-access
+	// workspace-write can escalate only to danger-full-access.
 	if !sandbox.CanEscalateTo(sandbox.ModeWorkspaceWrite, sandbox.ModeDangerFullAccess) {
 		t.Fatal("workspace-write 应可升级到 danger-full-access")
 	}
-	// 不能横向或向下升级
+	// Equal or narrower modes are not escalations.
 	if sandbox.CanEscalateTo(sandbox.ModeReadOnly, sandbox.ModeReadOnly) {
 		t.Fatal("read-only 不应升级到自身")
 	}
@@ -42,13 +35,13 @@ func TestWiderModes(t *testing.T) {
 	}
 }
 
-// TestEscalationTargets 验证封闭目标词汇。
+// TestEscalationTargets verifies the closed target vocabulary.
 func TestEscalationTargets(t *testing.T) {
 	targets := sandbox.EscalationTargets()
 	if len(targets) != 2 {
 		t.Fatalf("应有 2 个升级目标, 实际 %d", len(targets))
 	}
-	// read-only 是底线，不在目标中
+	// read-only is the baseline, not an escalation target.
 	for _, target := range targets {
 		if target == sandbox.ModeReadOnly {
 			t.Fatal("read-only 不应在升级目标中（底线）")
@@ -56,27 +49,27 @@ func TestEscalationTargets(t *testing.T) {
 	}
 }
 
-// TestValidateEscalationArgs 验证参数成对校验。
+// TestValidateEscalationArgs validates paired arguments.
 func TestValidateEscalationArgs(t *testing.T) {
-	// 两者都有 → 通过
+	// Both arguments are present: accept.
 	if err := sandbox.ValidateEscalationArgs("workspace-write", "需要写入日志文件"); err != nil {
 		t.Fatalf("成对参数应通过: %v", err)
 	}
-	// 只有 sandbox_permissions → 报错
+	// Only sandbox_permissions is present: reject.
 	if err := sandbox.ValidateEscalationArgs("workspace-write", ""); err == nil {
 		t.Fatal("缺少 justification 应报错")
 	}
-	// 只有 justification → 报错
+	// Only justification is present: reject.
 	if err := sandbox.ValidateEscalationArgs("", "需要写入"); err == nil {
 		t.Fatal("缺少 sandbox_permissions 应报错")
 	}
-	// justification 为空字符串 → 报错
+	// An empty justification is invalid.
 	if err := sandbox.ValidateEscalationArgs("workspace-write", "   "); err == nil {
 		t.Fatal("空白 justification 应报错")
 	}
 }
 
-// TestSandboxDenialMarker 验证拒绝标记格式。
+// TestSandboxDenialMarker verifies denial-marker formatting.
 func TestSandboxDenialMarker(t *testing.T) {
 	marker := sandbox.SandboxDenialMarker(sandbox.ModeReadOnly)
 	expected := "[sandbox: file access denied under read-only mode]"
@@ -85,23 +78,23 @@ func TestSandboxDenialMarker(t *testing.T) {
 	}
 }
 
-// TestEscalationHintMarker 验证升级提示标记。
+// TestEscalationHintMarker verifies the escalation hint.
 func TestEscalationHintMarker(t *testing.T) {
 	hint := sandbox.EscalationHintMarker("command")
 	if hint == "" {
 		t.Fatal("升级提示不应为空")
 	}
-	// 应包含 sandbox_permissions 关键词
+	// The hint must mention sandbox_permissions.
 	if !containsStr(hint, "sandbox_permissions") {
 		t.Fatalf("升级提示应包含 sandbox_permissions, 实际: %s", hint)
 	}
-	// 应包含 justification 关键词
+	// The hint must mention justification.
 	if !containsStr(hint, "justification") {
 		t.Fatalf("升级提示应包含 justification, 实际: %s", hint)
 	}
 }
 
-// fakeApprover 是测试用的审批者。
+// fakeApprover supplies test approval decisions.
 type fakeApprover struct {
 	outcome sandbox.EscalationOutcome
 	err     error
@@ -114,7 +107,7 @@ func (f *fakeApprover) Request(ctx context.Context, req sandbox.EscalationApprov
 	return f.outcome, nil
 }
 
-// TestApproveEscalationAllowed 验证审批通过时返回目标模式。
+// TestApproveEscalationAllowed returns the requested mode after approval.
 func TestApproveEscalationAllowed(t *testing.T) {
 	approver := &fakeApprover{outcome: sandbox.EscalationAllowedOnce}
 	result, err := sandbox.ApproveEscalation(context.Background(), sandbox.EscalationRequest{
@@ -133,11 +126,11 @@ func TestApproveEscalationAllowed(t *testing.T) {
 	}
 }
 
-// TestApproveEscalationNotWider 验证非严格更宽时拒绝（不询问用户）。
+// TestApproveEscalationNotWider rejects non-widening changes without prompting.
 func TestApproveEscalationNotWider(t *testing.T) {
 	approver := &fakeApprover{outcome: sandbox.EscalationAllowedOnce}
 	_, err := sandbox.ApproveEscalation(context.Background(), sandbox.EscalationRequest{
-		RequestedMode: sandbox.ModeReadOnly, // 从 read-only 升级到 read-only，非更宽
+		RequestedMode: sandbox.ModeReadOnly, // read-only to read-only does not widen access.
 		Justification: "需要写入",
 		EffectiveMode: sandbox.ModeReadOnly,
 		Subject:       "command",
@@ -149,7 +142,7 @@ func TestApproveEscalationNotWider(t *testing.T) {
 	}
 }
 
-// TestApproveEscalationRejected 验证用户拒绝时返回错误。
+// TestApproveEscalationRejected returns an error after rejection.
 func TestApproveEscalationRejected(t *testing.T) {
 	approver := &fakeApprover{outcome: sandbox.EscalationRejected}
 	_, err := sandbox.ApproveEscalation(context.Background(), sandbox.EscalationRequest{
@@ -168,7 +161,7 @@ func TestApproveEscalationRejected(t *testing.T) {
 	}
 }
 
-// TestApproveEscalationCancelled 验证审批取消时返回错误。
+// TestApproveEscalationCancelled returns an error after cancellation.
 func TestApproveEscalationCancelled(t *testing.T) {
 	approver := &fakeApprover{outcome: sandbox.EscalationCancelled}
 	_, err := sandbox.ApproveEscalation(context.Background(), sandbox.EscalationRequest{
@@ -184,7 +177,7 @@ func TestApproveEscalationCancelled(t *testing.T) {
 	}
 }
 
-// TestApproveEscalationUnavailable 验证审批通道不可用时返回错误。
+// TestApproveEscalationUnavailable returns an error when approval is unavailable.
 func TestApproveEscalationUnavailable(t *testing.T) {
 	approver := &fakeApprover{outcome: sandbox.EscalationUnavailable}
 	_, err := sandbox.ApproveEscalation(context.Background(), sandbox.EscalationRequest{
@@ -200,7 +193,7 @@ func TestApproveEscalationUnavailable(t *testing.T) {
 	}
 }
 
-// TestApproveEscalationNoApprover 验证无审批者时 fail-closed。
+// TestApproveEscalationNoApprover fails closed without an approver.
 func TestApproveEscalationNoApprover(t *testing.T) {
 	_, err := sandbox.ApproveEscalation(context.Background(), sandbox.EscalationRequest{
 		RequestedMode: sandbox.ModeWorkspaceWrite,

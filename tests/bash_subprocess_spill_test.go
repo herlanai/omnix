@@ -1,9 +1,5 @@
-// Package tests 的 Shell/Bash 接缝（M37）验收测试。
-//
-// 覆盖：
-//   - bash('seq 1 100000') → 默认 64kb 截断 → 读 spillPath 能拿到完整 100000 行
-//   - 超时 → RunResult.timedOut=true（正交字段）
-//   - 正常退出 → exitCode=0，未设置 timeoutMs=0
+// M37 shell tests cover truncating large output at the default 64 KB while retaining all 100000
+// lines in spill storage, an independent timedOut flag, and normal exitCode=0 with timeoutMs=0.
 package tests
 
 import (
@@ -15,7 +11,7 @@ import (
 	"github.com/herlanai/omnix/pkg/shell"
 )
 
-// bigSeqCmd 生成一个输出极多行的命令。
+// bigSeqCmd constructs a command that emits many lines.
 func bigSeqCmd() string {
 	if runtime.GOOS == "windows" {
 		return "for /L %i in (1,1,20000) do @echo line %i"
@@ -23,7 +19,7 @@ func bigSeqCmd() string {
 	return "seq 1 100000"
 }
 
-// TestBashSpillFullContent 验证 64KB 截断 + spill 拿完整内容。
+// TestBashSpillFullContent verifies 64 KB truncation and complete spill content.
 func TestBashSpillFullContent(t *testing.T) {
 	s := shell.New("workspace-write")
 	res, br, err := s.Run(shell.ExecRequest{Command: bigSeqCmd(), Cwd: t.TempDir()})
@@ -42,7 +38,7 @@ func TestBashSpillFullContent(t *testing.T) {
 	if br.SpillPath == "" {
 		t.Fatal("截断时应提供 spillPath")
 	}
-	// 从 spill 读完整流。
+	// Read the full output from spill storage.
 	data, err := os.ReadFile(br.SpillPath)
 	if err != nil {
 		t.Fatalf("读 spill 失败: %v", err)
@@ -55,14 +51,14 @@ func TestBashSpillFullContent(t *testing.T) {
 	if rows < want-10 {
 		t.Fatalf("spill 应含约 %d 行, 实际 %d 行", want, rows)
 	}
-	// 模型向结果引导读 spill。
+	// Model-facing output must direct the caller to the spill file.
 	formatted := shell.FormatOutput(&br)
 	if !strings.Contains(formatted, "full output at") {
 		t.Fatalf("格式输出应引导读 spill: %q", formatted)
 	}
 }
 
-// TestBashTimeout 验证超时 → timedOut=true。
+// TestBashTimeout verifies timedOut=true on timeout.
 func TestBashTimeout(t *testing.T) {
 	s := shell.New("workspace-write")
 	var cmd string
@@ -84,7 +80,7 @@ func TestBashTimeout(t *testing.T) {
 	_ = br
 }
 
-// TestBashOutputLines 验证正常短输出直接内联返回（不截断）。
+// TestBashOutputLines returns short output inline without truncation.
 func TestBashOutputLines(t *testing.T) {
 	s := shell.New("workspace-write")
 	var cmd string

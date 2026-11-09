@@ -1,13 +1,8 @@
-// Package sysprompt 提供系统提示词（System Prompt）的 Section 注册与有序组装。
-//
-// 对齐上游：packages/core/system-prompt
-//
-// 设计要点：
-//   - PromptSection{Name/Order/Text}：每个能力块是一个 Section，注册时给定固定的 order；
-//   - Assembler 按 order 升序合并所有 Section，构成最终 system prompt；
-//   - 顺序被写死为常量（对齐上游）：persona → policy → runtime-context-snapshot →
-//     plan:policy → tools schema → skill catalog。顺序错误会导致模型行为漂移，
-//     因此 order 必须来自常量字段而非运行时推导。
+// Package sysprompt registers and orders system-prompt sections, matching
+// core/system-prompt. Sections have names, fixed orders, and text. Assembler joins
+// them in ascending order: persona, policy, runtime context, plan policy, tool
+// schemas, then skill catalog. Order constants avoid runtime-dependent ordering
+// that could change model behavior.
 package sysprompt
 
 import (
@@ -20,23 +15,21 @@ import (
 	"github.com/herlanai/omnix/pkg/tools"
 )
 
-// ============================================================================
-// Section 顺序常量（对齐上游 packages/core/system-prompt，写死不可被运行时覆盖）
-// ============================================================================
+// Fixed section-order constants matching core/system-prompt upstream.
 
-// Section 顺序常量（数值即上游原始 order）。
+// Section ordering values match upstream.
 const (
-	// SectionOrderPersona 角色设定。
+	// SectionOrderPersona orders the persona.
 	SectionOrderPersona = 100
-	// SectionOrderPolicy 通用策略。
+	// SectionOrderPolicy orders general policy.
 	SectionOrderPolicy = 200
-	// SectionOrderRuntimeContext 运行时上下文快照。
+	// SectionOrderRuntimeContext orders runtime context snapshots.
 	SectionOrderRuntimeContext = 300
-	// SectionOrderPlanPolicy 计划模式策略（仅在 plan mode 注入）。
+	// SectionOrderPlanPolicy orders policy injected only in plan mode.
 	SectionOrderPlanPolicy = 500
-	// SectionOrderToolsSchema 工具 JSON Schema。
+	// SectionOrderToolsSchema orders tool JSON schemas.
 	SectionOrderToolsSchema = 600
-	// SectionOrderSkillCatalog 技能目录（D3 纪律：稳定序列化 + change-only 注入）。
+	// SectionOrderSkillCatalog orders the stable, change-only skill catalog (D3).
 	SectionOrderSkillCatalog = 700
 )
 
@@ -44,28 +37,28 @@ const (
 // Section & Assembler
 // ============================================================================
 
-// Section 是一个系统提示词块。
+// Section is a system-prompt block.
 type Section struct {
-	// Name 唯一标识（用于增删与调试）。
+	// Name uniquely identifies a section for registration, removal, and debugging.
 	Name string `json:"name"`
-	// Order 固定排序值（读取常量字段，运行时不可被覆盖）。
+	// Order is the fixed ordering value supplied from constants.
 	Order int `json:"order"`
-	// Text 块内容。
+	// Text contains the block content.
 	Text string `json:"text"`
 }
 
-// Assembler 是 Section 注册与有序组装器。
+// Assembler registers sections and assembles them in order.
 type Assembler struct {
 	mu       sync.RWMutex
 	sections []*Section
 }
 
-// New 创建空组装器。
+// New creates an empty assembler.
 func New() *Assembler {
 	return &Assembler{sections: []*Section{}}
 }
 
-// Register 注册一个 Section（同名覆盖，order 以传入为准）。
+// Register replaces a same-name section using the supplied order.
 func (a *Assembler) Register(name string, order int, text string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -79,7 +72,7 @@ func (a *Assembler) Register(name string, order int, text string) {
 	a.sections = append(a.sections, &Section{Name: name, Order: order, Text: text})
 }
 
-// Unregister 移除一个 Section。
+// Unregister removes a section.
 func (a *Assembler) Unregister(name string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -91,7 +84,7 @@ func (a *Assembler) Unregister(name string) {
 	}
 }
 
-// Has 判断某 Section 是否存在（用于 plan:policy 的审批开关判断）。
+// Has checks section presence, including the plan:policy approval toggle.
 func (a *Assembler) Has(name string) bool {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
@@ -103,13 +96,13 @@ func (a *Assembler) Has(name string) bool {
 	return false
 }
 
-// Sections 返回按 order 升序排序后的 Section 副本。
+// Sections returns section copies sorted by ascending order.
 func (a *Assembler) Sections() []*Section {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 	out := make([]*Section, len(a.sections))
 	copy(out, a.sections)
-	// 先按 order，order 相同再按 name：跨机器确定性，不依赖注册顺序。
+	// Break equal-order ties by name for cross-machine determinism independent of registration order.
 	sort.SliceStable(out, func(i, j int) bool {
 		if out[i].Order != out[j].Order {
 			return out[i].Order < out[j].Order
@@ -119,8 +112,7 @@ func (a *Assembler) Sections() []*Section {
 	return out
 }
 
-// Assemble 将所有 Section 按 order 升序拼接为最终 system prompt。
-// 相邻 Section 之间以一个空行分隔。
+// Assemble joins sections by ascending order with one blank line between them.
 func (a *Assembler) Assemble() string {
 	parts := make([]string, 0, len(a.sections))
 	for _, s := range a.Sections() {
@@ -132,30 +124,28 @@ func (a *Assembler) Assemble() string {
 	return strings.Join(parts, "\n\n")
 }
 
-// ============================================================================
-// 工具 Schema 注入
-// ============================================================================
+// Tool schema injection.
 
-// toolsSchemaEntry 是工具 schema 注入时单个工具的结构。
+// toolsSchemaEntry represents one injected tool schema.
 type toolsSchemaEntry struct {
-	Type        string `json:"type"`
-	Function    toolsFunction `json:"function"`
+	Type     string        `json:"type"`
+	Function toolsFunction `json:"function"`
 }
 
-// toolsFunction 是 OpenAI 风格的 function 描述。
+// toolsFunction describes an OpenAI-style function.
 type toolsFunction struct {
 	Name        string          `json:"name"`
 	Description string          `json:"description"`
 	Parameters  json.RawMessage `json:"parameters"`
 }
 
-// ToolsSectionText 将工具列表渲染为 tools schema Section 文本（确定性输出）。
-// 工具按 name 字典序排列；参数 schema 使用 M48 的确定性 Marshal。
+// ToolsSectionText renders deterministic tool schemas in lexical name order
+// using M48's deterministic parameter-schema marshaling.
 func ToolsSectionText(toolList []*tools.Tool) (string, error) {
 	if len(toolList) == 0 {
 		return "", nil
 	}
-	// 按 name 字典序排序（D3 纪律：无随机顺序）
+	// Sort names lexically for deterministic D3 ordering.
 	sorted := append([]*tools.Tool(nil), toolList...)
 	sort.SliceStable(sorted, func(i, j int) bool { return sorted[i].Name < sorted[j].Name })
 

@@ -1,4 +1,4 @@
-// Package tests 的派发前取消验收测试。
+// Package tests verifies cancellation before dispatch.
 package tests
 
 import (
@@ -21,7 +21,7 @@ func TestAbortedBeforeDispatch(t *testing.T) {
 	p := tools.NewPipeline().WithTool(tool)
 
 	ctx, cancel := context.WithCancel(context.Background())
-	cancel() // 派发前已取消。
+	cancel() // Cancel before dispatch.
 
 	req := &tools.ToolCallRequest{CallID: brand.NewToolCallID("c1"), Tool: "noop"}
 	res := p.Run(ctx, req, tool)

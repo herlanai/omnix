@@ -28,11 +28,11 @@ weight: 40
 
 ```go
 reg := registry.NewFreezable[string, *tools.Tool]()
-_ = reg.Put("bash", bashTool)          // 启动期热注册
-tool, ok := reg.Get("bash")            // 冻结前：读锁
-reg.Freeze()                           // 装配完成，构建只读快照
-_ = reg.Put("x", xTool)                // 冻结后写入 → ErrFrozen
-tool, ok = reg.Get("bash")             // 冻结后：无锁快照直读
+_ = reg.Put("bash", bashTool)          // Register dynamically during startup.
+tool, ok := reg.Get("bash")            // Before freezing: reads acquire a lock.
+reg.Freeze()                           // After assembly, build a read-only snapshot.
+_ = reg.Put("x", xTool)                // Writes after freezing return ErrFrozen.
+tool, ok = reg.Get("bash")             // After freezing: read the snapshot without locking.
 ```
 
 它的两段式生命周期正好对应 Agent 的装配阶段与运行阶段：
@@ -55,8 +55,8 @@ tool, ok = reg.Get("bash")             // 冻结后：无锁快照直读
 
 ```go
 bus := eventbus.New[int, error]()
-bus.On(func(n int) error { return nil })          // 未命中
-bus.On(func(n int) error { return errHit })       // 命中即短路
+bus.On(func(n int) error { return nil })          // No match.
+bus.On(func(n int) error { return errHit })       // Short-circuit on a match.
 res, ok := bus.Bail(7, func(e error) bool { return e != nil })
 ```
 
@@ -68,7 +68,7 @@ Cordis 的一条关键规则是：**通过 `ctx.on` 注册的监听器，在插�
 
 ```go
 dispose := bus.On(handler)
-defer dispose()          // 组件销毁时摘除，幂等可重复调用
+defer dispose()          // Remove on component disposal; repeated calls are safe.
 ```
 
 这种"注册即返回逆操作"的模式贯穿整个项目：注册工具返回注销、订阅事件返回退订。它让每一项资源都有明确的归属与回收点，避免监听器泄漏导致的"幽灵回调"。

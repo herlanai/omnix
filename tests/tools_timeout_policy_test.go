@@ -1,4 +1,4 @@
-// Package tests 的工具协作式超时策略验收测试。
+// Cooperative tool-timeout tests.
 package tests
 
 import (
@@ -54,7 +54,7 @@ func TestWrapTimeoutRespectsParentCancel(t *testing.T) {
 		<-ctx.Done()
 		return nil, ctx.Err()
 	}, 5000)
-	cancel() // 父先取消
+	cancel() // Cancel the parent first.
 	_, err := fn(ctx, nil)
 	var te *tools.TimeoutError
 	if errors.As(err, &te) {

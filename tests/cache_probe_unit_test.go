@@ -1,6 +1,4 @@
-// Package tests 的 N01 探针单元测试。
-//
-// 覆盖 CacheStats.ComputeHitRatio() 在 0 / 正常 / 全命中 / 全未命中场景的正确性（防 NaN）。
+// N01 probe tests verify ComputeHitRatio for zero, partial, full, and absent hits without NaN.
 package tests
 
 import (
@@ -9,7 +7,7 @@ import (
 	"github.com/herlanai/omnix/pkg/llm"
 )
 
-// TestCacheStatsHitRatioZero 验证总量 0 → 0.0（防 0/0 NaN）。
+// TestCacheStatsHitRatioZero returns 0.0 for a zero total, avoiding 0/0 NaN.
 func TestCacheStatsHitRatioZero(t *testing.T) {
 	cs := llm.CacheStats{}
 	if r := cs.ComputeHitRatio(); r != 0.0 {
@@ -17,7 +15,7 @@ func TestCacheStatsHitRatioZero(t *testing.T) {
 	}
 }
 
-// TestCacheStatsHitRatioPartial 验证部分命中（79/100 → 0.79）。
+// TestCacheStatsHitRatioPartial verifies 79/100 equals 0.79.
 func TestCacheStatsHitRatioPartial(t *testing.T) {
 	cs := llm.CacheStats{HitTokens: 79, MissTokens: 21}
 	r := cs.ComputeHitRatio()
@@ -26,7 +24,7 @@ func TestCacheStatsHitRatioPartial(t *testing.T) {
 	}
 }
 
-// TestCacheStatsHitRatioFull 验证全命中 → 1.0。
+// TestCacheStatsHitRatioFull returns 1.0 for all hits.
 func TestCacheStatsHitRatioFull(t *testing.T) {
 	cs := llm.CacheStats{HitTokens: 100, MissTokens: 0}
 	if r := cs.ComputeHitRatio(); r != 1.0 {
@@ -34,7 +32,7 @@ func TestCacheStatsHitRatioFull(t *testing.T) {
 	}
 }
 
-// TestCacheStatsHitRatioNone 验证全未命中 → 0.0。
+// TestCacheStatsHitRatioNone returns 0.0 for all misses.
 func TestCacheStatsHitRatioNone(t *testing.T) {
 	cs := llm.CacheStats{HitTokens: 0, MissTokens: 50}
 	if r := cs.ComputeHitRatio(); r != 0.0 {
@@ -42,7 +40,7 @@ func TestCacheStatsHitRatioNone(t *testing.T) {
 	}
 }
 
-// TestCacheStatsAddRecord 验证累计聚合与 log 行。
+// TestCacheStatsAddRecord verifies aggregation and log output.
 func TestCacheStatsAddRecord(t *testing.T) {
 	cs := llm.CacheStats{}
 	cs.RecordUsage(llm.Usage{PromptTokens: 1000, PromptCacheHitTokens: 800, PromptCacheMissTokens: 200})
@@ -54,7 +52,7 @@ func TestCacheStatsAddRecord(t *testing.T) {
 	if r < 0.86 || r > 0.87 {
 		t.Fatalf("累计命中率应约 0.867, 实际 %v", r)
 	}
-	// 日志行字段。
+	// Check log fields.
 	line := llm.CacheLogLine(llm.Usage{PromptCacheHitTokens: 900, PromptCacheMissTokens: 100})
 	if line != "cache.hit_ratio=0.900" {
 		t.Fatalf("日志行应 cache.hit_ratio=0.900, 实际 %q", line)

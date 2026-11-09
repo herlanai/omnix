@@ -1,9 +1,5 @@
-// Package tests 的权限预设（M28）验收测试。
-//
-// 覆盖：
-//   - 内置 4 预设（safe/danger/review/custom）的组合元组一一对应
-//   - 未知预设回落 custom
-//   - Derive 派生状态（含用户 override → IsCustom + 派生字段）
+// M28 permission preset tests verify safe/danger/review/custom tuples, fallback to custom for
+// unknown names, and derived fields with IsCustom after overrides.
 package tests
 
 import (
@@ -14,7 +10,7 @@ import (
 	"github.com/herlanai/omnix/pkg/sandbox"
 )
 
-// TestPermissionPresetsCombo 验证 4 预设的 {sandboxMode, approvalPolicy} 组合。
+// TestPermissionPresetsCombo verifies each preset's sandbox-mode/approval-policy pair.
 func TestPermissionPresetsCombo(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -35,14 +31,14 @@ func TestPermissionPresetsCombo(t *testing.T) {
 			t.Errorf("预设 %q 组合错误: got %+v, want sandbox=%s approval=%s", c.name, p, c.sandbox, c.approx)
 		}
 	}
-	// 名称集合稳定。
+	// The set of preset names is stable.
 	names := presets.PresetNames()
 	if len(names) != 4 {
 		t.Fatalf("应有 4 个预设, 实际 %v", names)
 	}
 }
 
-// TestPermissionPresetResolveUnknownFallsBackToCustom 验证未知预设回落 custom。
+// TestPermissionPresetResolveUnknownFallsBackToCustom verifies unknown-name fallback.
 func TestPermissionPresetResolveUnknownFallsBackToCustom(t *testing.T) {
 	p, ok := presets.Resolve("nonexistent-preset")
 	if !ok {
@@ -56,7 +52,7 @@ func TestPermissionPresetResolveUnknownFallsBackToCustom(t *testing.T) {
 	}
 }
 
-// TestPermissionPresetMappers 验证 preset→approval/sandbox 映射函数（供 approval.Service 接线）。
+// TestPermissionPresetMappers verifies mappings used to wire approval.Service.
 func TestPermissionPresetMappers(t *testing.T) {
 	am := presets.ApprovalMapper()
 	sb := presets.SandboxMapper()
@@ -70,9 +66,9 @@ func TestPermissionPresetMappers(t *testing.T) {
 	}
 }
 
-// TestPermissionPresetDerive 验证 Derive 派生状态与 IsCustom 标记。
+// TestPermissionPresetDerive checks derived state and IsCustom.
 func TestPermissionPresetDerive(t *testing.T) {
-	// 无 override：非 custom。
+	// No override means the preset is not custom.
 	st := presets.Derive(presets.PresetSafe, nil, nil)
 	if st.IsCustom {
 		t.Fatal("无 override 不应是 custom")
@@ -80,7 +76,7 @@ func TestPermissionPresetDerive(t *testing.T) {
 	if st.ActivePreset != presets.PresetSafe || st.SandboxMode != sandbox.ModeReadOnly {
 		t.Fatalf("safe 派生状态错误: %+v", st)
 	}
-	// 带 override：派生字段生效 + IsCustom=true。
+	// Overrides update derived fields and set IsCustom=true.
 	ws := sandbox.ModeDangerFullAccess
 	allow := approval.PolicyAllowAll
 	st = presets.Derive(presets.PresetCustom, &ws, &allow)

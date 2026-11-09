@@ -1,4 +1,4 @@
-// 本文件对应任务 M20：session/end-seed 种子边界 marker。
+// M20 session/end-seed boundary marker tests.
 package tests
 
 import (
@@ -8,20 +8,20 @@ import (
 	"github.com/herlanai/omnix/pkg/session"
 )
 
-// TestEndSeedBracket 验证 Resume/Fork 后必写 end-seed 且分界正确。
+// TestEndSeedBracket verifies the seed/live boundary after resume or fork.
 func TestEndSeedBracket(t *testing.T) {
 	sl := session.NewSessionLog(brand.NewSessionID("s1"))
 
-	// 先写入种子事件（模拟 Resume 回放的存量）
+	// Append seed events to simulate replayed history.
 	_, _ = sl.Append(session.UserMessageData{Content: "seed1"})
 	_, _ = sl.Append(session.UserMessageData{Content: "seed2"})
 
-	// 回放完成后写 end-seed（无父会话）
+	// Append end-seed after replay, without a parent session.
 	if _, err := session.MarkEndSeed(sl, brand.SessionID{}); err != nil {
 		t.Fatalf("MarkEndSeed 失败: %v", err)
 	}
 
-	// 之后是 live 工作
+	// Live work follows the marker.
 	_, _ = sl.Append(session.UserMessageData{Content: "live1"})
 
 	seedSeq := session.SeedEndSeq(sl.Events())
@@ -29,7 +29,7 @@ func TestEndSeedBracket(t *testing.T) {
 		t.Fatal("应存在 end-seed")
 	}
 
-	// seed 事件在 end-seed 之前，live 事件在之后
+	// Seed events precede end-seed; live events follow it.
 	if !session.IsAfterEndSeed(sl.Events(), seedSeq+1) {
 		t.Fatal("live1 应在 end-seed 之后")
 	}
@@ -38,7 +38,7 @@ func TestEndSeedBracket(t *testing.T) {
 	}
 }
 
-// TestEndSeedForkParent 验证 Fork 后 end-seed 携带父会话。
+// TestEndSeedForkParent verifies forked end-seed events carry the parent session.
 func TestEndSeedForkParent(t *testing.T) {
 	parentID := brand.NewSessionID("parent_s")
 	sl := session.NewSessionLog(brand.NewSessionID("child_s"))
@@ -59,7 +59,7 @@ func TestEndSeedForkParent(t *testing.T) {
 	}
 }
 
-// TestEndSeedHeaderLength 验证会话头部种子长度分界。
+// TestEndSeedHeaderLength verifies seed length in the session header.
 func TestEndSeedHeaderLength(t *testing.T) {
 	h := session.NewSessionHeader(brand.NewSessionID("s1"), "/ws")
 	h.SeedLength = 42

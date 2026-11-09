@@ -1,6 +1,6 @@
-// Package schedule 复刻官方 schedule 的进程内调度核心：after（延迟一次性）、
-// at（绝对时刻一次性）、every（固定周期，不低于 5 分钟）三类提醒的注册、触发与
-// 取消。提醒投递不离开拥有者会话（session-local）。
+// Package schedule implements in-process reminders: after for relative one-shot
+// delays, at for absolute one-shot times, and every for fixed intervals of at least
+// five minutes. Registration, delivery, and cancellation stay within the owning session.
 package schedule
 
 import (
@@ -9,43 +9,43 @@ import (
 	"time"
 )
 
-// MinEveryInterval 是固定周期规则允许的最小间隔（5 分钟）。
+// MinEveryInterval is the minimum periodic interval: five minutes.
 const MinEveryInterval = 5 * time.Minute
 
-// Kind 是调度规则类型。
+// Kind identifies a scheduling rule.
 type Kind string
 
 const (
-	KindAfter Kind = "after" // 相对延迟一次性
-	KindAt    Kind = "at"    // 绝对时刻一次性
-	KindEvery Kind = "every" // 固定周期
+	KindAfter Kind = "after" // Relative one-shot delay.
+	KindAt    Kind = "at"    // Absolute one-shot time.
+	KindEvery Kind = "every" // Fixed interval.
 )
 
-// ErrEmptyPrompt 提醒内容为空。
+// ErrEmptyPrompt indicates empty reminder content.
 var ErrEmptyPrompt = errors.New("schedule: empty prompt")
 
-// ErrNotFuture 目标时刻不在未来。
+// ErrNotFuture indicates a target time that is not in the future.
 var ErrNotFuture = errors.New("schedule: target is not in the future")
 
-// ErrIntervalTooShort 周期小于最小值。
+// ErrIntervalTooShort indicates an interval below the minimum.
 var ErrIntervalTooShort = errors.New("schedule: every interval below minimum")
 
-// Entry 是一条活动提醒。
+// Entry represents an active reminder.
 type Entry struct {
 	ID       string
 	Kind     Kind
 	Prompt   string
 	NextAt   time.Time
-	Interval time.Duration // 仅 every
+	Interval time.Duration // Used only for every.
 }
 
-// Dispatch 是一次到点回调。
+// Dispatch describes a due reminder notification.
 type Dispatch struct {
 	ID     string
 	Prompt string
 }
 
-// Scheduler 是并发安全的进程内调度器。
+// Scheduler is a concurrency-safe in-process scheduler.
 type Scheduler struct {
 	mu      sync.Mutex
 	entries map[string]*Entry
@@ -54,7 +54,7 @@ type Scheduler struct {
 	now     func() time.Time
 }
 
-// New 创建调度器，dispatch 送到返回的通道。
+// New creates a scheduler that sends dispatches to its output channel.
 func New() *Scheduler {
 	return &Scheduler{
 		entries: map[string]*Entry{},
@@ -64,14 +64,14 @@ func New() *Scheduler {
 	}
 }
 
-// SetNow 注入时钟（测试用）。
+// SetNow injects a clock for testing.
 func (s *Scheduler) SetNow(f func() time.Time) {
 	s.mu.Lock()
 	s.now = f
 	s.mu.Unlock()
 }
 
-// Out 返回到点通知通道。
+// Out returns the due-notification channel.
 func (s *Scheduler) Out() <-chan Dispatch { return s.out }
 
 func (s *Scheduler) arm(id string, at time.Time) {
@@ -80,7 +80,7 @@ func (s *Scheduler) arm(id string, at time.Time) {
 	s.timers[id] = t
 }
 
-// After 注册相对延迟一次性提醒。
+// After registers a relative one-shot reminder.
 func (s *Scheduler) After(id, prompt string, delay time.Duration) error {
 	if prompt == "" {
 		return ErrEmptyPrompt
@@ -91,7 +91,7 @@ func (s *Scheduler) After(id, prompt string, delay time.Duration) error {
 	return s.add(&Entry{ID: id, Kind: KindAfter, Prompt: prompt, NextAt: s.now().Add(delay)})
 }
 
-// At 注册绝对时刻一次性提醒。
+// At registers an absolute one-shot reminder.
 func (s *Scheduler) At(id, prompt string, at time.Time) error {
 	if prompt == "" {
 		return ErrEmptyPrompt
@@ -102,7 +102,7 @@ func (s *Scheduler) At(id, prompt string, at time.Time) error {
 	return s.add(&Entry{ID: id, Kind: KindAt, Prompt: prompt, NextAt: at})
 }
 
-// Every 注册固定周期提醒。
+// Every registers a fixed-interval reminder.
 func (s *Scheduler) Every(id, prompt string, interval time.Duration) error {
 	if prompt == "" {
 		return ErrEmptyPrompt
@@ -122,7 +122,7 @@ func (s *Scheduler) add(e *Entry) error {
 	return nil
 }
 
-// fire 到点：发出通知；一次性移除，周期性重排。
+// fire emits a notification, removes one-shot entries, and reschedules periodic entries.
 func (s *Scheduler) fire(id string) {
 	s.mu.Lock()
 	e, ok := s.entries[id]
@@ -141,7 +141,7 @@ func (s *Scheduler) fire(id string) {
 	s.mu.Unlock()
 }
 
-// Cancel 取消一条提醒；不存在返回 false。
+// Cancel cancels a reminder, returning false if absent.
 func (s *Scheduler) Cancel(id string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -155,7 +155,7 @@ func (s *Scheduler) Cancel(id string) bool {
 	return exists
 }
 
-// List 列出活动提醒快照。
+// List returns a snapshot of active reminders.
 func (s *Scheduler) List() []Entry {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -166,7 +166,7 @@ func (s *Scheduler) List() []Entry {
 	return out
 }
 
-// Shutdown 停止全部计时器。
+// Shutdown stops all timers.
 func (s *Scheduler) Shutdown() {
 	s.mu.Lock()
 	defer s.mu.Unlock()

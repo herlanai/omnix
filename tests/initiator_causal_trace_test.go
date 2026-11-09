@@ -1,4 +1,4 @@
-// 本文件对应任务 M33：Agent Initiator 上下文（安全归因）。
+// M33 Agent initiator context and security attribution tests.
 package tests
 
 import (
@@ -9,12 +9,12 @@ import (
 	"github.com/herlanai/omnix/pkg/brand"
 )
 
-// TestInitiatorCausalTrace 验证 initiator 随 context 传递并携带正确身份。
+// TestInitiatorCausalTrace verifies identity propagation through context.
 func TestInitiatorCausalTrace(t *testing.T) {
 	ctx := agent.WithInitiator(context.Background(), brand.NewSessionID("agent_x"), "Run")
 
-	// 模拟进入子调用后仍能取到
-	weakCtx := context.WithValue(ctx, "somekey", "v") // 无关 value 不影响 initiator
+	// Identity remains available in a child call.
+	weakCtx := context.WithValue(ctx, "somekey", "v") // Unrelated context values must not affect the initiator.
 	ini, err := agent.RequireInitiator(weakCtx)
 	if err != nil {
 		t.Fatalf("RequireInitiator 失败: %v", err)
@@ -27,7 +27,7 @@ func TestInitiatorCausalTrace(t *testing.T) {
 	}
 }
 
-// TestInitiatorUnauthorized 验证无 withInitiator 包裹时返回结构化错误。
+// TestInitiatorUnauthorized returns a structured error without WithInitiator.
 func TestInitiatorUnauthorized(t *testing.T) {
 	_, err := agent.RequireInitiator(context.Background())
 	if err == nil {
@@ -39,7 +39,7 @@ func TestInitiatorUnauthorized(t *testing.T) {
 	}
 }
 
-// TestInitiatorWithout 验证 withoutInitiator 隔离身份后 require 失败。
+// TestInitiatorWithout removes identity so Require fails.
 func TestInitiatorWithout(t *testing.T) {
 	withIni := agent.WithInitiator(context.Background(), brand.NewSessionID("a"), "op")
 	cleared := agent.WithoutInitiator(withIni)
@@ -49,7 +49,7 @@ func TestInitiatorWithout(t *testing.T) {
 	}
 }
 
-// TestInitiatorMustPanic 验证无 initiator 时 MustInitiator panic。
+// TestInitiatorMustPanic panics when no initiator is present.
 func TestInitiatorMustPanic(t *testing.T) {
 	defer func() {
 		if recover() == nil {
@@ -59,7 +59,7 @@ func TestInitiatorMustPanic(t *testing.T) {
 	_ = agent.MustInitiator(context.Background())
 }
 
-// asUnauthorizedInitiator 便捷类型断言。
+// asUnauthorizedInitiator performs a convenient type assertion.
 func asUnauthorizedInitiator(err error, target **agent.UnauthorizedInitiatorError) bool {
 	e, ok := err.(*agent.UnauthorizedInitiatorError)
 	if ok {

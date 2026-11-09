@@ -1,4 +1,4 @@
-// 本文件对应任务 M43：Persistence 接缝 + Flush Checkpoint + Crash Repair。
+// M43 persistence, flush checkpoints, and crash repair tests.
 package tests
 
 import (
@@ -10,10 +10,10 @@ import (
 	"github.com/herlanai/omnix/pkg/session"
 )
 
-// TestPersistenceCrashRepair 验证 append 过程中"崩溃"（未写 turn/end）→ reload → repair 关闭孤儿 turn。
+// TestPersistenceCrashRepair repairs an orphaned turn after a simulated crash without turn/end.
 func TestPersistenceCrashRepair(t *testing.T) {
 	dir := t.TempDir()
-	backend, err := persistence.NewJSONL(dir, 1) // batch 1：触发异步落盘
+	backend, err := persistence.NewJSONL(dir, 1) // Batch size one triggers asynchronous persistence.
 	if err != nil {
 		t.Fatalf("NewJSONL 失败: %v", err)
 	}
@@ -25,7 +25,7 @@ func TestPersistenceCrashRepair(t *testing.T) {
 		t.Fatalf("SaveHeader 失败: %v", err)
 	}
 
-	// 写入半截 turn + 工具事件（已落盘），但不写 turn/end（模拟进程在此崩溃）
+	// Persist an incomplete turn and tool events without turn/end to simulate a crash.
 	events := []session.SessionEvent{
 		{Seq: 1, Type: session.EventTurnStart, Data: session.TurnStartData{Turn: 0}},
 		{Seq: 2, Type: session.EventStepStart, Data: session.StepStartData{Turn: 0, Step: 1}},
@@ -38,12 +38,12 @@ func TestPersistenceCrashRepair(t *testing.T) {
 			t.Fatalf("Append 失败: %v", err)
 		}
 	}
-	// 明确刷新已接受的事件；不关闭 turn，模拟持久化后的崩溃。
+	// Explicitly flush accepted events while leaving the turn open.
 	if err := backend.Flush(ctx, id); err != nil {
 		t.Fatal(err)
 	}
 
-	// reload（重新打开文件做 repair）
+	// Reload and repair the persisted session.
 	backend2, err := persistence.NewJSONL(dir, 1)
 	if err != nil {
 		t.Fatalf("重新打开失败: %v", err)
@@ -53,11 +53,11 @@ func TestPersistenceCrashRepair(t *testing.T) {
 		t.Fatalf("Load 失败: %v", err)
 	}
 
-	// 校验：原 4 条 + tool/result、step/end、turn/end 三条修复事件
+	// Expect four original events plus repaired tool/result, step/end, and turn/end events.
 	if len(loaded) != 7 {
 		t.Fatalf("load 后事件数 = %d, want 7（4 条 + 三条配对修复事件）", len(loaded))
 	}
-	// 补写的 turn/end{reason:interrupted} 应在末尾
+	// The final repair event must be turn/end with reason interrupted.
 	last := loaded[len(loaded)-1]
 	if last.Type != session.EventTurnEnd {
 		t.Fatalf("末尾应为 repair 的 turn/end: %+v", last)
@@ -66,7 +66,7 @@ func TestPersistenceCrashRepair(t *testing.T) {
 		t.Fatalf("repair 的 turn/end 应为 interrupted: %+v", last.Data)
 	}
 
-	// 已写入的 chunk/tool/call 事件应全部保留
+	// Retain all previously written chunk and tool/call events.
 	foundCall := false
 	for _, ev := range loaded {
 		if ev.Type == session.EventToolCall {
@@ -78,7 +78,7 @@ func TestPersistenceCrashRepair(t *testing.T) {
 	}
 }
 
-// TestPersistenceForkLineage 验证 fork 后父/子会话 Persistence 键目录正确隔离。
+// TestPersistenceForkLineage verifies isolated parent/child persistence directories.
 func TestPersistenceForkLineage(t *testing.T) {
 	dir := t.TempDir()
 	backend, err := persistence.NewJSONL(dir, 1)
@@ -96,7 +96,7 @@ func TestPersistenceForkLineage(t *testing.T) {
 		t.Fatalf("child SaveHeader 失败: %v", err)
 	}
 
-	// 两个会话应各自可加载且互为父子关系
+	// Both sessions must load with the correct parent/child relationship.
 	_, parentEvents, err := backend.Load(ctx, parent.ID)
 	if err != nil {
 		t.Fatalf("parent Load 失败: %v", err)
@@ -113,7 +113,7 @@ func TestPersistenceForkLineage(t *testing.T) {
 		t.Fatalf("child.ParentSession = %q, want parent", childHeader.ParentSession.Raw())
 	}
 
-	// List 应包含两个会话
+	// List must include both sessions.
 	ids, err := backend.List(ctx)
 	if err != nil {
 		t.Fatalf("List 失败: %v", err)
@@ -123,7 +123,7 @@ func TestPersistenceForkLineage(t *testing.T) {
 	}
 }
 
-// TestPersistenceFlushCheckpoint 验证 flush 后文件确实落盘可重载。
+// TestPersistenceFlushCheckpoint verifies flushed data can be reloaded from disk.
 func TestPersistenceFlushCheckpoint(t *testing.T) {
 	dir := t.TempDir()
 	backend, err := persistence.NewJSONL(dir, 100)
@@ -136,11 +136,11 @@ func TestPersistenceFlushCheckpoint(t *testing.T) {
 	header := session.NewSessionHeader(id, "/ws")
 	_ = backend.SaveHeader(ctx, header)
 
-	// 写入几条事件（batch 100，不自动 flush）
+	// Append a few events below the 100-entry batch threshold.
 	_ = backend.Append(ctx, id, session.SessionEvent{Seq: 1, Type: session.EventTurnStart, Data: session.TurnStartData{Turn: 0}})
 	_ = backend.Append(ctx, id, session.SessionEvent{Seq: 2, Type: session.EventTurnEnd, Data: session.TurnEndData{Turn: 0, Reason: session.ReasonFinished}})
 
-	// flush 前重载（新 backend）应看不到事件（未落盘）
+	// A new backend must not see unflushed events.
 	backendProbe := newJSONLNoCheck(t, dir)
 	_, before, _ := backendProbe.Load(ctx, id)
 	if len(before) != 0 {
@@ -152,7 +152,7 @@ func TestPersistenceFlushCheckpoint(t *testing.T) {
 		t.Fatalf("Flush 失败: %v", err)
 	}
 
-	// 重载应看到 2 条事件
+	// After flushing, reloading must return two events.
 	_, after, err := backend.Load(ctx, id)
 	if err != nil {
 		t.Fatalf("reload 失败: %v", err)
@@ -162,7 +162,7 @@ func TestPersistenceFlushCheckpoint(t *testing.T) {
 	}
 }
 
-// newJSONLNoCheck 简化构造（不关心错误）。
+// newJSONLNoCheck constructs a backend while discarding the error.
 func newJSONLNoCheck(t *testing.T, dir string) *persistence.JSONLBackend {
 	t.Helper()
 	b, err := persistence.NewJSONL(dir, 1)

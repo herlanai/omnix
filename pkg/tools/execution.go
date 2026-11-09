@@ -1,12 +1,7 @@
-// 本文件对应任务 M25：ToolRunContext deferContext + concludeTurn。
-//
-// 对齐上游：packages/core/tools/types ToolRunContext
-//
-// 设计要点：
-//   - ToolRunContext 提供工具执行期间的运行时上下文（Meta + defer 回调注册）；
-//   - concludeTurn 是终止当前 turn 的权威标记：被 goal report_blocker 等调用后，
-//     Agent 循环在下一条是否需要继续时据此结束 turn；
-//   - 通过上下文传播：pipeline 内的工具实现可调用 Agent 级 conclude 控制。
+// ToolRunContext provides runtime metadata, deferred cleanup, and turn conclusion (M25),
+// matching upstream tools/types. ConcludeTurn is authoritative: tools such as goal
+// report_blocker can end the current turn, and the agent checks that state before continuing.
+// Context propagation exposes the agent-level control inside the pipeline.
 package tools
 
 import (
@@ -14,18 +9,18 @@ import (
 	"sync"
 )
 
-// concludeKey 是 context 中 conclude 回调的键。
+// concludeKey identifies the conclusion callback in a context.
 type concludeKey struct{}
 
-// ConcludeFunc 是结束当前 turn 的回调（由 Agent 注册）。
+// ConcludeFunc ends the current turn and is registered by the agent.
 type ConcludeFunc func(reason string)
 
-// WithConclude 将 conclude 回调注入 context。
+// WithConclude attaches a conclusion callback to ctx.
 func WithConclude(ctx context.Context, fn ConcludeFunc) context.Context {
 	return context.WithValue(ctx, concludeKey{}, fn)
 }
 
-// ConcludeFrom 从 ctx 取 conclude 回调；不存在返回 nil。
+// ConcludeFrom returns the conclusion callback, or nil if absent.
 func ConcludeFrom(ctx context.Context) ConcludeFunc {
 	if fn, ok := ctx.Value(concludeKey{}).(ConcludeFunc); ok {
 		return fn
@@ -33,7 +28,7 @@ func ConcludeFrom(ctx context.Context) ConcludeFunc {
 	return nil
 }
 
-// ToolRunContext 是工具执行期间的运行时上下文。
+// ToolRunContext holds runtime state for one tool execution.
 type ToolRunContext struct {
 	mu        sync.Mutex
 	meta      map[string]any
@@ -42,19 +37,19 @@ type ToolRunContext struct {
 	conclude  ConcludeFunc
 }
 
-// NewToolRunContext 创建工具运行上下文。
+// NewToolRunContext creates a tool runtime context.
 func NewToolRunContext(conclude ConcludeFunc) *ToolRunContext {
 	return &ToolRunContext{meta: map[string]any{}, conclude: conclude}
 }
 
-// SetMeta 设置运行元数据。
+// SetMeta stores runtime metadata.
 func (tc *ToolRunContext) SetMeta(k string, v any) {
 	tc.mu.Lock()
 	defer tc.mu.Unlock()
 	tc.meta[k] = v
 }
 
-// GetMeta 读取运行元数据。
+// GetMeta reads runtime metadata.
 func (tc *ToolRunContext) GetMeta(k string) (any, bool) {
 	tc.mu.Lock()
 	defer tc.mu.Unlock()
@@ -62,14 +57,14 @@ func (tc *ToolRunContext) GetMeta(k string) (any, bool) {
 	return v, ok
 }
 
-// DeferContext 注册一个在工具结束时执行的清理/收尾回调（类似 Go defer）。
+// DeferContext registers cleanup to run when the tool finishes, like Go defer.
 func (tc *ToolRunContext) DeferContext(fn func()) {
 	tc.mu.Lock()
 	defer tc.mu.Unlock()
 	tc.deferred = append(tc.deferred, fn)
 }
 
-// runDeferred 按 LIFO 执行全部 deferred 回调。
+// runDeferred invokes all deferred callbacks in LIFO order.
 func (tc *ToolRunContext) runDeferred() {
 	tc.mu.Lock()
 	defers := make([]func(), len(tc.deferred))
@@ -83,8 +78,8 @@ func (tc *ToolRunContext) runDeferred() {
 	}
 }
 
-// ConcludeTurn 结束当前 turn（权威标记），并执行 deferred 回调。
-// 多次调用不会重复触发 conclude。
+// ConcludeTurn marks the current turn as concluded and runs deferred callbacks. Repeated calls
+// do not invoke the conclusion callback again.
 func (tc *ToolRunContext) ConcludeTurn(reason string) bool {
 	tc.mu.Lock()
 	if tc.concluded {
@@ -102,27 +97,27 @@ func (tc *ToolRunContext) ConcludeTurn(reason string) bool {
 	return true
 }
 
-// IsConcluded 是否已 conclude（Agent 判续步用）。
+// IsConcluded reports whether the agent should stop advancing the turn.
 func (tc *ToolRunContext) IsConcluded() bool {
 	tc.mu.Lock()
 	defer tc.mu.Unlock()
 	return tc.concluded
 }
 
-// Context 返回携带该 ToolRunContext 的 context（供工具实现读取）。
+// Context returns a context carrying this ToolRunContext for tool implementations.
 func (tc *ToolRunContext) Context() context.Context {
 	return withRunContext(context.Background(), tc)
 }
 
-// runContextKey 是 context 中 ToolRunContext 的键。
+// runContextKey identifies ToolRunContext within a context.
 type runContextKey struct{}
 
-// withRunContext 注入 ToolRunContext 到 context。
+// withRunContext attaches ToolRunContext to ctx.
 func withRunContext(ctx context.Context, tc *ToolRunContext) context.Context {
 	return context.WithValue(ctx, runContextKey{}, tc)
 }
 
-// ToolRunContextFrom 从 ctx 取 ToolRunContext。
+// ToolRunContextFrom retrieves ToolRunContext from ctx.
 func ToolRunContextFrom(ctx context.Context) (*ToolRunContext, bool) {
 	tc, ok := ctx.Value(runContextKey{}).(*ToolRunContext)
 	return tc, ok

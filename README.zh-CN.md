@@ -1,73 +1,42 @@
 # omnix
 
-<div align="center">
+**可嵌入 Go 应用的 Agent 运行时，支持持久会话状态与工具调用。**
 
-**把 DeepSeek Agent 规划能力嵌入 Go 后端的进程内参考实现 · An in-process Go reference implementation of the DeepSeek Harness Agent**
+[English](README.md) · [简体中文](README.zh-CN.md)
 
-<img src="assets/omnix-cover.jpg" alt="omnix — 面向 DeepSeek Agent 规划的 Go 参考实现" width="100%" />
+omnix 将 Agent 执行循环、工具调用和可重放的会话状态放在同一个 Go 进程中。核心由追加式事件日志、状态投影、四阶段工具流水线和 DeepSeek 流式适配器组成，规划、持久化、子代理和工作流则以独立包提供。
 
-[![Go 1.25](https://img.shields.io/badge/Go-1.25-00ADD8?logo=go&logoColor=white)](https://go.dev/)
-[![DSH compat](https://img.shields.io/badge/DeepSeek_Harness-cd5ef81-blue)](#兼容性)
-[![Event Sourcing](https://img.shields.io/badge/architecture-event--sourcing-7c3aed)](#特性)
-[![Go Report](https://img.shields.io/badge/Go_Report-A+-0ea5e9)](https://goreportcard.com)
-[![License](https://img.shields.io/badge/license-see%20LICENSE-lightgrey)](LICENSE)
+项目仍在持续开发。可以先运行本地示例，再按应用需求装配各个组件。
 
-[简体中文](README.zh-CN.md) · [English](README.md)
+## 可以用来做什么
 
-</div>
+- **构建历史可追踪的 Agent。** 将轮次、模型回复、工具调用和结果记录为会话事件，派生当前状态，或重放已保存的对话。
+- **为工具配置执行策略。** 通过中间件校验参数，处理审批、访问限制、超时和结果加工。
+- **管理有状态的规划。** 在会话中维护目标、待办和计划模式，并按需向模型提供规划工具。
+- **接入 Go 应用。** 注入模型适配器、注册工具、选择持久化方式，在应用内组合子代理和工作流。
 
----
+## 快速开始
 
-> **omnix** 是一份纯 Go、**进程内**的 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) Agent **参考实现**——它把官方 DSH 的 Turn/Step 双循环、事件溯源、Goal 规划、工具治理等核心能力接缝，逐词对译为 Go 代码，**让开发者可以阅读、调试、复刻一个真实 Agent 的内部运作**。
->
-> 它定位为**参考实现与学习素材**，而非与 LangChain / Eino / 官方 DSH 竞争的生产级框架：生态、背书与多模型适配均非本文目标，本文目标是"**读懂 Agent 内核**"。
-
-> **❓ 快速了解本项目** —— 想先弄清楚"这是什么 / 和 Eino·LangChain 什么关系 / 有什么优势 / 适合什么场景 / 值不值得用"？请直接阅读 **[FAQ（常见问题）](./docs/FAQ.md)**。
-
-> **SDK 核心链路更新**：工具注册与派发、DeepSeek 流式工具调用、会话重放、取消/释放和持久化刷新已补通，见 [使用说明与边界](./docs/SDK_CORE.md)。
-
-## 📖 目录
-
-- [为什么选择 omnix](#-为什么选择-omnix)
-- [特性](#-特性)
-- [快速开始](#-快速开始)
-- [示例](#-示例)
-- [架构](#-架构)
-- [模块能力矩阵](#-模块能力矩阵)
-- [性能](#-性能)
-- [文档](#-文档)
-- [兼容性](#-兼容性)
-- [参与贡献](#-参与贡献)
-- [License](#-license)
-
-## 📌 为什么选择 omnix
-
-- **可读的 Agent 内核**：官方仅有 TS 主仓与 Python minimal 版；本文用 Go 给出**逐词对译**的完整能力接缝，模块小而独立，适合**(对照源码)读懂**一个 Agent 的真实运作。
-- **三条学习主线**：事件溯源 → fold 派生投影 → Goal 状态机，配合 [`examples/tutorial`](#-示例) 三步渐进示例，是一条清晰的内核学习路径。
-- **可复现的工程实践**：事件溯源增量投影（≈3437×）、连接池调优、并发加固与缓存亲和等，都带**基准数据与回归用例**可复现，适合作为工程范本研读。
-- **诚实边界**：非生产级框架、非 LangChain/Eino 替代品；生态、多模型适配不在本文目标内。
-
-## ✨ 特性
-
-- **事件溯源会话**（`pkg/session`）：追加式日志 + 派生 `fold` 投影；45+ 事件词汇表；时序不变量由引擎强制。
-- **Turn/Step 双循环**（`pkg/agent`）：取消 / 超时 / 追踪经 ctx 逐层传播到工具与 LLM（H01）。
-- **内建规划**：[计划模式](./pkg/plan)、[目标 Goal](./pkg/goal)（状态机 + 续轮驱动 + CAS + 稳定错误码）、[待办 Todo](./pkg/todo)、[技能 Skills](./pkg/skills)（6 层 Provider + fsnotify）。
-- **四段工具流水线**（`pkg/tools`）：`pre → execute → post → result` 中间件链；带 `sync.Pool` 与只读注册表，高并发更稳。
-- **DeepSeek Provider**（`pkg/llm/provider_deepseek`）：流式 SSE + 生产级连接池 + 与官方 `error.ts` 对齐的稳定失败分类。
-- **30+ 能力包**：文件系统、shell、子进程、spill、jobs、终端、工作区、权限、凭证、设置、子代理、工作流、MCP……
-- **可观测性**（`pkg/telemetry`、`pkg/tokenmeter`）：OTel 桥、会话遥测钩子、token 计量与预算、缓存指标。
-
-## 🚀 快速开始
-
-> 作为参考实现，你**不一定需要 `go get` 引入**——最轻的入门方式是直接跑 `examples/` 并对照源码阅读。若确实想在本项目上做实验，可这样引入：
-
-**安装**：
+需要 **Go 1.25 或更新版本**。SQLite 支持使用纯 Go 的 `modernc.org/sqlite` 驱动。
 
 ```bash
-go get github.com/herlanai/omnix@latest
+git clone https://github.com/herlanai/omnix.git
+cd omnix
+go run ./examples/agent_loop
+go run ./examples/tutorial
 ```
 
-**最小可用示例** —— 创建会话、追加事件、派生状态：
+这两个示例均不需要模型 API Key。`agent_loop` 使用脚本化适配器演示完整的工具调用闭环。`tutorial` 介绍会话与投影；其中的目标工具部分尚未创建目标，因此当前会输出 `GOAL_NOT_FOUND`。
+
+在已有 Go 模块中引入：
+
+```bash
+go get github.com/herlanai/omnix
+```
+
+### 创建会话
+
+会话状态由事件日志派生。如果需要随事件追加反复读取状态，可以启用增量投影。
 
 ```go
 package main
@@ -80,96 +49,155 @@ import (
 )
 
 func main() {
-	sl := session.NewSessionLog(brand.NewSessionID("hello"))
-	if _, err := sl.Append(session.UserMessageData{Content: "Hello"}); err != nil {
+	log := session.NewSessionLog(brand.NewSessionID("hello"))
+	log.EnableIncrementalProjection()
+
+	if _, err := log.Append(session.UserMessageData{Content: "Hello, omnix!"}); err != nil {
 		panic(err)
 	}
-	proj := session.FoldAll(sl.Events())
-	fmt.Printf("%d message(s) in log\n", len(proj.Messages))
+
+	for _, message := range log.Projection().Messages {
+		fmt.Printf("%s: %s\n", message.Role, message.Content)
+	}
 }
 ```
 
-## 🧭 示例
+输出：
 
-仓库内置九个可直接运行的示例，全部零依赖可跑（除 `chat` 需 API Key），**建议从 `tutorial` 开始**：
+```text
+user: Hello, omnix!
+```
+
+### 运行 Agent
+
+[Agent 循环示例](examples/agent_loop/main.go) 展示了完整装配过程：将 `SessionLog`、系统提示词、工具 `Pipeline` 和 `llm.LLMAdapter` 传入 `agent.NewAgent`。
+
+执行生命周期是异步的：
+
+1. 启动前完成适配器、工具和中间件配置。
+2. 使用 `SetRunContext` 设置执行上下文。
+3. 通过 `Run` 或 `Followup` 提交输入；返回值表示输入是否已被接受。
+4. 使用 `WhenIdle(ctx)` 等待已接受的工作结束；从会话事件中读取模型或工具错误，以及轮次结束原因。
+5. 使用 `Cancel` 取消活动执行，在不再使用 Agent 时调用 `Dispose`。
+
+`WhenIdle` 的上下文超时只会结束等待。执行的取消由运行上下文或 `Cancel` 控制，工具实现需要响应自己的上下文。
+
+### 体验 DeepSeek 适配器
+
+聊天示例会发起真实 API 请求，需要提供自己的凭证：
 
 ```bash
-go run ./examples/tutorial          # 教学三步曲：事件溯源 → fold 投影 → Goal 状态机（推荐入门）
-go run ./examples/agent_loop       # 完整 Agent Turn/Step 循环（含工具续步）
-go run ./examples/usage            # 会话/投影/Goal 工具/命令/DeepSeek Provider/持久化
-go run ./examples/todo             # Todo 整体替换待办（规划原语）
-go run ./examples/workflow         # 工作流编排：Pipeline 串行 / Parallel 并行 / Agent 步骤 / 取消级联
-go run ./examples/subagent         # 子代理：多后端派生 + 家谱 + 父释放级联
-go run ./examples/sandbox_approval # 沙箱(在哪儿) + 审批(能不能) 受控执行
-go run ./examples/mcp              # MCP 客户端 → 工具桥（内存 Transport 模拟服务器）
-go run ./examples/chat             # 真实调用 DeepSeek 大模型的多轮对话（需 DEEPSEEK_API_KEY）
+export DEEPSEEK_API_KEY="your-api-key"
+export DEEPSEEK_MODEL="deepseek-chat"
+go run ./examples/chat
 ```
 
-- [examples/tutorial/main.go](examples/tutorial/main.go) —— **教学入口**：用「事件溯源 → fold 派生投影 → Goal 状态机」三条独立主线，渐进讲解 Agent 内核；每步带大量注释并对照 `pkg/session` / `pkg/goal` 源码阅读。
-- [examples/agent_loop/main.go](examples/agent_loop/main.go) —— 装配 SessionLog + SystemPrompt + 工具流水线 + LLM 适配器，演示 Turn 内「工具续步 → 结束」。
-- [examples/usage/main.go](examples/usage/main.go) —— 事件溯源、fold 投影、Goal 工具（含稳定错误码）、slash 命令、DeepSeek 连接池与失败分类、JSONL 持久化读回。
-- [examples/todo/main.go](examples/todo/main.go) —— Todo **整体替换**（last-write-wins）：用 `todo_write` 写入待办、从事件日志派生读回、观察旧列表被整体覆盖。
-- [examples/workflow/main.go](examples/workflow/main.go) —— 工作流引擎：`Pipeline` 串行短路 / `Parallel` 并发保序 / `Agent` 子代理步骤 / ctx 取消级联终止。
-- [examples/subagent/main.go](examples/subagent/main.go) —— 子代理接缝：`Runtime.Spawn` 多后端派生 + `ForkLineage` 家谱归因 + `Drain` 收结果 + `DisposeOwner` 父释放级联 + 未知后端稳定错误。
-- [examples/sandbox_approval/main.go](examples/sandbox_approval/main.go) —— 受控执行：审批三层策略解析（预设→用户→会话）+ 三态决策（allow/deny/ask）+ 危险工具 ask 的 fail-closed；沙箱模式解析与 danger 判定。
-- [examples/mcp/main.go](examples/mcp/main.go) —— **MCP 桥接**：用内存 `Transport` 模拟 MCP 服务器，演示 `Initialize → ListTools → Bridge.ToTools → 统一调用 → 挂进流水线` 的完整链路，零网络零依赖。
-- [examples/chat/main.go](examples/chat/main.go) —— 从环境变量读取 `DEEPSEEK_API_KEY`，构造 DeepSeek provider，通过 `LLMAdapter.Chat` 发起流式多轮对话，展示 `ChunkReasoning / ChunkText / ChunkToolCall / ChunkDone` 分片消费、`LlmFailure` 稳定分类与 usage 用量统计。
+`DEEPSEEK_MODEL` 可省略，示例默认使用 `deepseek-chat`。该示例直接演示模型流式访问；工具派发和会话记录的用法请参考 Agent 循环示例。
 
-## 🏗️ 架构
+## 工作方式
 
+```text
+Application input
+       |
+       v
+Agent turn / step loop <----> LLM adapter
+       |                         |
+       |                    Tool requests
+       |                         v
+       |        pre -> execute -> post -> result
+       |                         |
+       +------ session events ---+
+                    |
+                    v
+             Append-only log
+              /           \
+       Projections     Persistence
 ```
-Session (事件溯源) ──► fold / 投影 ──► Prompt 组装 ──► Agent Turn/Step 循环
-                                                                 │
-                        工具 Waterfall (pre → execute → post → result) ◄─┘
+
+一个轮次可以包含多次模型请求与工具执行。事件记录执行过程，投影提供当前状态视图，持久化保存历史以供加载和重放。压缩通过表面替换调整可见历史，保留原始事件。
+
+## 模块
+
+| 领域 | 包 | 职责 |
+| --- | --- | --- |
+| 运行时 | [`agent`](pkg/agent)、[`session`](pkg/session)、[`eventbus`](pkg/eventbus) | 执行生命周期、事件历史、投影、通知 |
+| 模型访问 | [`llm`](pkg/llm)、[`provider_deepseek`](pkg/llm/provider_deepseek) | 适配器接口、流式响应、用量、错误分类 |
+| 工具 | [`tools`](pkg/tools)、[`approval`](pkg/approval)、[`sandbox`](pkg/sandbox) | 参数 Schema、中间件、访问决策、执行约束 |
+| 规划 | [`goal`](pkg/goal)、[`todo`](pkg/todo)、[`plan`](pkg/plan)、[`skills`](pkg/skills) | 目标状态、待办、计划模式、技能发现 |
+| 存储 | [`persistence`](pkg/persistence)、[`sqlite`](pkg/persistence/sqlite)、[`storage`](pkg/storage) | JSONL、SQLite/FTS5、作用域存储 |
+| 编排 | [`subagent`](pkg/subagent)、[`workflow`](pkg/workflow)、[`mcp`](pkg/mcp) | 子代理接口、工作流、MCP 工具桥接 |
+| 本地执行 | [`fs`](pkg/fs)、[`shell`](pkg/shell)、[`subprocess`](pkg/subprocess)、[`jobs`](pkg/jobs) | 文件、命令、进程、后台任务 |
+| 可观测性 | [`telemetry`](pkg/telemetry)、[`tokenmeter`](pkg/tokenmeter) | 会话指标、Token 估算与预算 |
+
+## 示例
+
+在仓库根目录运行以下命令。
+
+| 命令 | 内容 |
+| --- | --- |
+| `go run ./examples/tutorial` | 事件、投影与目标工具校验 |
+| `go run ./examples/agent_loop` | 使用脚本化适配器完成模型请求、工具执行和轮次结束 |
+| `go run ./examples/usage` | SDK 组件与 JSONL 持久化 |
+| `go run ./examples/todo` | 待办写入与状态派生 |
+| `go run ./examples/workflow` | 串行与并行编排 |
+| `go run ./examples/subagent` | 子代理后端与生命周期 |
+| `go run ./examples/sandbox_approval` | 沙箱模式与审批策略解析 |
+| `go run ./examples/mcp` | 使用内存传输实现 MCP 工具桥接 |
+| `go run ./examples/chat` | DeepSeek 流式对话，需要 API Key |
+
+## 性能
+
+近期优化减少了事件分发的内存分配，使用合并区间过滤可见历史，并去掉了增量预设比较中的反射。以下为 Apple M5、macOS arm64、Go 1.26.2 环境中三次测试的中位数。
+
+| 微基准场景 | 优化前 | 优化后 |
+| --- | ---: | ---: |
+| 向 16 个监听器分发事件 | 34.17 ns/op；1 alloc/op | 13.28 ns/op；0 allocs/op |
+| 过滤含替换区间的 10,000 条事件 | 215.73 μs/op | 99.27 μs/op |
+| 增量处理 10,000 条事件 | 1.010 ms/op；21,683 allocs/op | 0.493 ms/op；1,683 allocs/op |
+
+结果取决于硬件和工作负载。事件总线将列表复制放在注册与注销阶段，使分发无需分配内存，适合分发频繁、监听器变更较少的场景。
+
+复现当前实现的基准：
+
+```bash
+go test ./pkg/eventbus ./pkg/session -run '^$' \
+  -bench 'BenchmarkEmit|BenchmarkEffectiveEvents' -benchmem -count=3
+go test ./tests -run '^$' \
+  -bench '^BenchmarkIncrementalH04IncrementalPath$' -benchmem -count=3
+go test ./tests -run '^$' -bench '^BenchmarkSQLiteSearch$' -benchmem
 ```
 
-每项能力都是一个 **能力接缝（Capability Seam）**：`服务定义 + Provider`。替换 Provider 即改变整体行为，与官方 `Capability Seam` 设计一致。
+## 开发与验证
 
-## 📦 模块能力矩阵
+```bash
+gofmt -w cmd examples internal pkg tests
+go vet ./...
+go test ./...
+go test -race ./...
+```
 
-| 包 | 能力 |
-|---|---|
-| [`pkg/session`](./pkg/session) | 事件溯源、45+ 词汇表、fold、不变量、增量投影 |
-| [`pkg/agent`](./pkg/agent) | Agent 注册表、Turn/Step 循环、取消原因、请求错误重试 |
-| [`pkg/tools`](./pkg/tools) | Waterfall 流水线、执行上下文、展示、限制、schema、保留 |
-| [`pkg/llm`](./pkg/llm) | LLM 接缝、流式协议(SSE)、失败分类、重试、缓存探针 |
-| [`pkg/goal`](./pkg/goal) / [`pkg/todo`](./pkg/todo) / [`pkg/plan`](./pkg/plan) / [`pkg/skills`](./pkg/skills) | 规划能力原语 |
-| [`pkg/persistence`](./pkg/persistence) / [`pkg/storage`](./pkg/storage) | JSONL(分片/异步) & SQLite(→FTS5) 后端、CAS 存储域 |
-| [`pkg/subagent`](./pkg/subagent) / [`pkg/workflow`](./pkg/workflow) / [`pkg/mcp`](./pkg/mcp) | 子代理、工作流引擎、MCP 客户端→工具桥 |
-| [`pkg/fs`](./pkg/fs) / [`pkg/shell`](./pkg/shell) / [`pkg/subprocess`](./pkg/subprocess) / [`pkg/spill`](./pkg/spill) / [`pkg/jobs`](./pkg/jobs) / [`pkg/terminal`](./pkg/terminal) | 文件与进程执行 |
-| [`pkg/settings`](./pkg/settings) / [`pkg/credentials`](./pkg/credentials) / [`pkg/approval`](./pkg/approval) / [`pkg/sandbox`](./pkg/sandbox) / [`pkg/scope`](./pkg/scope) | 配置、凭证、安全、作用域 |
-| [`pkg/telemetry`](./pkg/telemetry) / [`pkg/tokenmeter`](./pkg/tokenmeter) / [`pkg/feedback`](./pkg/feedback) / [`pkg/sessionquery`](./pkg/sessionquery) | 可观测性、计量、反馈、搜索 |
+测试包含本地 HTTP/SSE 模拟服务，运行环境需要允许监听回环地址。部分规划中的用例仍以显式跳过的测试骨架保留。代码注释统一使用英文；行为变更应补充回归测试，性能改动使用独立基准衡量。
 
-## ⚡ 性能
+## 当前实现范围
 
-关键路径均做过并发与分配级加固（`go test -bench` 可复现）：
+内置模型适配器面向 DeepSeek，其他模型服务需要实现 `llm.LLMAdapter`。实际请求由构造 Agent 时传入的适配器处理，`AgentOptions.Provider` 尚不提供运行时 Provider 路由。
 
-| 场景 | 优化 | 实测 |
-|---|---|---|
-| Session 派生投影（10k 事件，每步读） | 增量 fold（H04） | **16.9s → 4.9ms**，≈ **3437×** |
-| 共享注册表读（100 键 Get） | Freeze 后无锁快照（H07） | 65.6 → 49.4ns，快 **25%**，0 alloc |
-| 持久化 IO | bytes.Buffer + bufio.Writer 双 `sync.Pool`（H05） | 热路径分配显著下降 |
-| Tool 流水线 | ExecContext 对象池（H06） | allocs 9 → 8 |
+MCP 网络传输、完整的 Inbox steering，以及压缩和重试策略的自动装配仍需进一步集成。沙箱约束能力因后端而异，Windows 实现仍有未完成的约束路径；部署前应核对对应包的实现。
 
-## 📚 文档
+详细行为见 [SDK 执行链路与集成边界](docs/SDK_CORE.md)。
 
-- 🌐 **在线文档站（GitHub Pages）**：https://JopenChen.github.io/omnix/ —— 中英双语、全文搜索、教程与示例导航；基于 Hugo + Hextra，采用 **DeepSeek Harness 风格 3D 玻璃拟态暗色主题**（源码在 [`site/`](./site)）。
-- [文档索引](./docs) —— 详细设计、任务表、缓存方案、测试用例矩阵。
-- [`docs/FAQ.md`](./docs/FAQ.md) —— **新手 FAQ**：本项目是什么、与 Eino / LangChain / 官方 DSH 的关系、审计算不算独有、适合什么场景、值不值得用。
-- [`docs/TASKS.md`](./docs/TASKS.md) · [`docs/tasks.json`](./docs/tasks.json) —— 结构化任务表（机器 + 人可读）。
-- [`docs/TEST_CASES.md`](./docs/TEST_CASES.md) —— 328 条测试用例设计矩阵。
-- [`docs/CACHE_HIT_RATE_PLAN.md`](./docs/CACHE_HIT_RATE_PLAN.md) —— 前缀缓存命中率对齐方案。
+## 文档
 
-## 🤝 兼容性
+- [SDK 执行链路](docs/SDK_CORE.md)
+- [设计与任务记录](docs/TASKS.md)
+- [测试用例规格](docs/TEST_CASES.md)
+- [前缀缓存设计](docs/CACHE_HIT_RATE_PLAN.md)
+- [文档站源码](site/)
 
-- **语言**：Go 1.25+
-- **SQLite**：[modernc.org/sqlite](https://modernc.org/sqlite)（纯 Go，无 CGO）
-- **上游锚点**：DeepSeek Harness `master` @ **cd5ef81**（`dsh-0.1.2-alpha.1`）
+设计和任务记录中包含历史规划，当前行为以实现和测试为准。
 
-## 🧑‍🤝‍🧑 参与贡献
+## 来源与许可证
 
-欢迎提交 Issue 与 PR。请确保改动通过 `gofmt`、`go vet ./...` 与 `go test ./tests/ -count=1`。
+omnix 起源于 `dsh-go`，设计参考了 DeepSeek Harness。本仓库独立演进 Go 实现，不声明与上游全部功能完全兼容。
 
-## 📄 License
-
-见 [LICENSE](LICENSE)。
+采用 [MIT License](LICENSE)，保留原始版权声明。

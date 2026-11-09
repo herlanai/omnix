@@ -1,17 +1,17 @@
-// Package retain 复刻官方 util/output-retention 的逻辑单元有界保留：向保留器持续
-// push 观察到的单元，只保留前 maxItems 个，其余精确计数为省略，finish 给出保留
-// 子集与省略元数据。它只回答"保留了什么、省略了多少"，不含任何工具业务语义。
+// Package retain implements bounded logical-item retention from util/output-retention.
+// Push keeps the first maxItems units and counts all omitted units exactly. Finish
+// returns retained items and omission metadata without tool-specific semantics.
 package retain
 
-// Result 是保留结果。
+// Result describes retained and omitted items.
 type Result[T any] struct {
-	Items     []T // 保留的子集
-	Seen      int  // 观察到的总数
-	Omitted   int  // 因预算省略的数量
-	Truncated bool // 是否发生省略
+	Items     []T  // Retained subset.
+	Seen      int  // Total observed items.
+	Omitted   int  // Items omitted due to the budget.
+	Truncated bool // Whether any items were omitted.
 }
 
-// ItemRetainer 保留前 maxItems 个逻辑单元（head）。
+// ItemRetainer keeps the first maxItems logical units.
 type ItemRetainer[T any] struct {
 	maxItems int
 	items    []T
@@ -19,7 +19,7 @@ type ItemRetainer[T any] struct {
 	omitted  int
 }
 
-// NewItemRetainer 创建 head 保留器；maxItems 为负按 0 处理。
+// NewItemRetainer creates a head retainer; negative limits become zero.
 func NewItemRetainer[T any](maxItems int) *ItemRetainer[T] {
 	if maxItems < 0 {
 		maxItems = 0
@@ -27,7 +27,8 @@ func NewItemRetainer[T any](maxItems int) *ItemRetainer[T] {
 	return &ItemRetainer[T]{maxItems: maxItems}
 }
 
-// Push 提供一个观察单元：未满则保留，已满则计入省略。返回该单元是否被保留。
+// Push observes an item, retaining it if capacity remains or counting its omission.
+// It reports whether the item was retained.
 func (r *ItemRetainer[T]) Push(item T) bool {
 	r.seen++
 	if len(r.items) < r.maxItems {
@@ -38,7 +39,7 @@ func (r *ItemRetainer[T]) Push(item T) bool {
 	return false
 }
 
-// Finish 结算保留结果。
+// Finish returns the retention result.
 func (r *ItemRetainer[T]) Finish() Result[T] {
 	return Result[T]{
 		Items:     r.items,

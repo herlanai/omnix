@@ -1,9 +1,6 @@
-// Package tests 的 N02（D1 纪律）验收测试。
-//
-// 覆盖：
-//   - 严格 append-only：SessionLog 仅暴露 Append() 一个写路径（Events 只读拷贝）
-//   - 8 条不变量全部通过（正常日志）+ 人为注入反例被逐条捕获
-//   - 50 轮正常对话后 seq 连续 + time 单调
+// N02/D1 tests verify append-only access with copied Events snapshots, eight invariants on valid
+// and deliberately corrupted logs, and contiguous sequences with monotonic timestamps across 50
+// turns.
 package tests
 
 import (
@@ -15,7 +12,7 @@ import (
 	"github.com/herlanai/omnix/pkg/session"
 )
 
-// buildHealthyLog 构造一段 8 条不变量全部通过的健康日志（含 turn/step/approval/goal/tool）。
+// buildHealthyLog creates a valid log covering turn, step, approval, goal, and tool invariants.
 func buildHealthyLog(t *testing.T) []session.SessionEvent {
 	sl := session.NewSessionLog(brand.NewSessionID("n02"))
 	_, _ = sl.Append(session.TurnStartData{Turn: 0})
@@ -33,7 +30,7 @@ func buildHealthyLog(t *testing.T) []session.SessionEvent {
 	return sl.Events()
 }
 
-// TestN02AllInvariantsPass 验证健康日志 8 条不变量全部通过。
+// TestN02AllInvariantsPass accepts all eight invariants for a healthy log.
 func TestN02AllInvariantsPass(t *testing.T) {
 	events := buildHealthyLog(t)
 	if fails := session.VerifyInvariants(events); len(fails) != 0 {
@@ -41,33 +38,33 @@ func TestN02AllInvariantsPass(t *testing.T) {
 	}
 }
 
-// TestN02InvSeqGapCaptured 验证人为注入 seq 跳号被捕获。
+// TestN02InvSeqGapCaptured detects an injected sequence gap.
 func TestN02InvSeqGapCaptured(t *testing.T) {
 	events := buildHealthyLog(t)
-	// 改乱一个 seq：把 index 2 的 seq 改成 999（不重排，直接生成独立反例更直观）。
+	// Change the event at index 2 to sequence 999 without reordering.
 	corrupt := append([]session.SessionEvent{}, events...)
 	corrupt[2].Seq = 999
-	corrupt[2].Type = session.EventUserMessage // 避免类型与 seq 校验冲突；seq 校验只看非 surface 事件
+	corrupt[2].Type = session.EventUserMessage // Use a non-surface event to isolate sequence validation.
 	fails := session.VerifyInvariants(corrupt)
 	if !hasInvariant(fails, session.InvSeqContinuous) {
 		t.Fatalf("seq 跳号应被 seq_continuous 捕获: %v", fails)
 	}
 }
 
-// TestN02InvTimeRewindCaptured 验证时间回退被捕获。
+// TestN02InvTimeRewindCaptured detects timestamps moving backward.
 func TestN02InvTimeRewindCaptured(t *testing.T) {
 	events := buildHealthyLog(t)
 	corrupt := append([]session.SessionEvent{}, events...)
-	corrupt[3].Time = corrupt[2].Time.Add(-time.Hour) // 回退
+	corrupt[3].Time = corrupt[2].Time.Add(-time.Hour) // Move the timestamp backward.
 	fails := session.VerifyInvariants(corrupt)
 	if !hasInvariant(fails, session.InvTimeMonotonic) {
 		t.Fatalf("时间回退应被 time_monotonic 捕获: %v", fails)
 	}
 }
 
-// TestN02InvUnpairedTurnCaptured 验证 turn 不配对被捕获。
+// TestN02InvUnpairedTurnCaptured detects an unmatched turn.
 func TestN02InvUnpairedTurnCaptured(t *testing.T) {
-	// 只有一个 turn/start，无 turn/end。
+	// Include turn/start without turn/end.
 	var events []session.SessionEvent
 	ev := session.SessionEvent{Seq: 1, Time: time.Now(), Type: session.EventTurnStart, Data: session.TurnStartData{Turn: 0}}
 	events = append(events, ev)
@@ -77,10 +74,10 @@ func TestN02InvUnpairedTurnCaptured(t *testing.T) {
 	}
 }
 
-// TestN02InvGoalCASCaptured 验证 goal revision 跳号被捕获。
+// TestN02InvGoalCASCaptured detects a skipped goal revision.
 func TestN02InvGoalCASCaptured(t *testing.T) {
 	events := buildHealthyLog(t)
-	// 追加一个 revision 4 的 goal 变更（期望 3）。用一个全新日志追加会更清晰，这里直接扩 slice。
+	// Append revision 4 where revision 3 is expected.
 	extra := session.SessionEvent{Seq: 100, Time: time.Now().Add(time.Minute), Type: session.EventGoalChange,
 		Data: session.GoalChangeData{GoalID: "g1", Revision: 4}}
 	events = append(events, extra)
@@ -90,7 +87,7 @@ func TestN02InvGoalCASCaptured(t *testing.T) {
 	}
 }
 
-// TestN02InvUnknownTypeCaptured 验证未知事件类型被格式不变量捕获。
+// TestN02InvUnknownTypeCaptured detects an unknown event type.
 func TestN02InvUnknownTypeCaptured(t *testing.T) {
 	events := buildHealthyLog(t)
 	corrupt := append([]session.SessionEvent{}, events...)
@@ -101,7 +98,7 @@ func TestN02InvUnknownTypeCaptured(t *testing.T) {
 	}
 }
 
-// TestN02FiftyRoundsSeqTime 验证 50 轮正常对话后 seq 连续 + time 单调。
+// TestN02FiftyRoundsSeqTime verifies contiguous sequences and monotonic time over 50 turns.
 func TestN02FiftyRoundsSeqTime(t *testing.T) {
 	sl := session.NewSessionLog(brand.NewSessionID("n02-50"))
 	for i := uint64(0); i < 50; i++ {
@@ -116,11 +113,11 @@ func TestN02FiftyRoundsSeqTime(t *testing.T) {
 	if fails := session.VerifyInvariants(events); len(fails) != 0 {
 		t.Fatalf("50 轮后不变量应通过: %v", fails)
 	}
-	// seq 1..300 连续。
+	// Sequences 1 through 300 must be contiguous.
 	if len(events) != 300 || events[299].Seq != 300 {
 		t.Fatalf("应 300 条事件且末 seq=300, 实际 %d/%d", len(events), events[len(events)-1].Seq)
 	}
-	// time 单调。
+	// Timestamps must be monotonic.
 	for i := 1; i < len(events); i++ {
 		if events[i].Time.Before(events[i-1].Time) {
 			t.Fatalf("time 不单调 at %d", i)
@@ -128,12 +125,12 @@ func TestN02FiftyRoundsSeqTime(t *testing.T) {
 	}
 }
 
-// TestN02AppendOnlyContract 验证 SessionLog 只读视图不暴露写方法（Events 是拷贝）。
+// TestN02AppendOnlyContract verifies Events returns a copy rather than writable internal storage.
 func TestN02AppendOnlyContract(t *testing.T) {
 	sl := session.NewSessionLog(brand.NewSessionID("ao"))
 	_, _ = sl.Append(session.UserMessageData{Content: "a"})
 	_, _ = sl.Append(session.UserMessageData{Content: "b"})
-	// 取只读快照并尝试就地修改 → 不影响内部日志（拷贝）。
+	// Mutating the returned snapshot must not affect the internal log.
 	events := sl.Events()
 	events[0].Data = session.UserMessageData{Content: "HACK"}
 	if sl.Len() != 2 {

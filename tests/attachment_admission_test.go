@@ -1,4 +1,4 @@
-// Package tests 的 attachment canonical base64 准入验收测试。
+// Attachment canonical base64 admission tests.
 package tests
 
 import (
@@ -20,8 +20,8 @@ func TestCanonicalBase64OK(t *testing.T) {
 func TestCanonicalBase64Reject(t *testing.T) {
 	bad := []string{
 		"",
-		"aGVsbG8",    // 缺 padding
-		"aGVsb G8=",  // 含空白
+		"aGVsbG8",   // Missing padding.
+		"aGVsb G8=", // Contains whitespace.
 		"!!!",
 	}
 	for _, b := range bad {

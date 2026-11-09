@@ -1,5 +1,6 @@
-// Package homepath 复刻官方 util/home-paths 的用户数据根解析：按"显式配置 >
-// OMNIX_HOME 环境变量 > ~/.omnix"的优先级确定唯一根，并支持 ~ 展开与符号化显示。
+// Package homepath resolves the user data root using explicit configuration,
+// then OMNIX_HOME, then ~/.omnix. It supports tilde expansion and symbolic display,
+// matching util/home-paths upstream.
 package homepath
 
 import (
@@ -8,13 +9,13 @@ import (
 	"strings"
 )
 
-// HomeDirName 是默认 Harness home 目录名。
+// HomeDirName is the default Harness home directory name.
 const HomeDirName = ".omnix"
 
-// EnvName 是覆盖默认 home 的环境变量名。
+// EnvName is the environment variable overriding the default home.
 const EnvName = "OMNIX_HOME"
 
-// ExpandHome 展开开头的 ~、~/、~\\ 为操作系统 home；不支持的前缀原样返回。
+// ExpandHome expands leading ~, ~/, or ~\ to the OS home; other prefixes are unchanged.
 func ExpandHome(path string) (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -29,8 +30,8 @@ func ExpandHome(path string) (string, error) {
 	return path, nil
 }
 
-// Resolve 按优先级解析 Harness home。configured 非空优先；否则用 env 中非空白
-// 的 OMNIX_HOME；都没有则退回 ~/.omnix。
+// Resolve prefers nonempty configured, then nonblank OMNIX_HOME in env,
+// then the default ~/.omnix.
 func Resolve(configured string, env map[string]string) (string, error) {
 	var selected string
 	switch {
@@ -52,7 +53,7 @@ func Resolve(configured string, env map[string]string) (string, error) {
 	return filepath.Abs(expanded)
 }
 
-// Display 把解析后的 home 符号化：默认 home 显示为 ~/.omnix，自定义的显示为 $OMNIX_HOME。
+// Display renders the default home as ~/.omnix and custom homes as $OMNIX_HOME.
 func Display(resolvedHome string) string {
 	home, err := os.UserHomeDir()
 	if err != nil {

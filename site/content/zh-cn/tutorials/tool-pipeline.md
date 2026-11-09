@@ -70,9 +70,9 @@ pre-execute 是可重排的策略层，多个策略插件都可能给出决策�
 ```go
 g := tools.NewMonotonicGuard()
 _ = g.Update(tools.PreAllow)
-_ = g.Update(tools.PreDeny)              // 收紧，接受
-err := g.Update(tools.PreAllow)         // 放宽，拒绝 → ErrGuardRelaxed
-// g.Decision() 仍是 PreDeny（fail closed）
+_ = g.Update(tools.PreDeny)              // Accept a stricter decision.
+err := g.Update(tools.PreAllow)         // Reject relaxation with ErrGuardRelaxed.
+// g.Decision remains PreDeny to fail closed.
 ```
 
 这是一条典型的 fail-closed 设计：安全策略的优先级永远高于便利策略，任何想"撤销"一个已成立的拒绝的尝试都会被明确拒绝，而不是被静默放行。

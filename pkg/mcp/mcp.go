@@ -1,12 +1,7 @@
-// Package mcp 提供 MCP（Model Context Protocol）客户端 → ToolDefinition 桥（任务 S13）。
-//
-// 对齐上游：packages 的 MCP 客户端接缝 + (原生 MCP 协议 spec)
-//
-// 设计要点：
-//   - MCPTransport 抽象 JSON-RPC 上承载的传输方式（stdio / SSE……），生产可替换；
-//   - MCPClient 按 MCP 协议初始化并列出工具（tools/list）与调用工具（tools/call）；
-//   - ToolBridge 把 MCP 服务器暴露的工具自动映射为 pkg/tools.Tool（M48 强校验子集 schema
-//     + Execute 包装），从而「工具自动出现在 ToolRegistry 并能正常调用」。
+// Package mcp bridges Model Context Protocol clients to tool definitions (S13).
+// Transport abstracts JSON-RPC over stdio, SSE, or other backends. Client initializes
+// the MCP connection, lists tools, and invokes them. Bridge maps server tools to
+// pkg/tools.Tool with the validated M48 schema subset and an execution wrapper.
 package mcp
 
 import (
@@ -18,38 +13,36 @@ import (
 	"github.com/herlanai/omnix/pkg/tools"
 )
 
-// ============================================================================
-// MCP 工具 Schema
-// ============================================================================
+// MCP tool schemas.
 
-// MCPSchema 是一个由 MCP 服务器暴露的工具定义。
+// MCPSchema describes a tool exposed by an MCP server.
 type MCPSchema struct {
 	Name        string         `json:"name"`
 	Description string         `json:"description,omitempty"`
-	InputSchema map[string]any `json:"inputSchema"` // JSON Schema（object 形式）
+	InputSchema map[string]any `json:"inputSchema"` // JSON Schema in object form.
 }
 
 // ============================================================================
 // Transport
 // ============================================================================
 
-// Request 是一条 JSON-RPC 请求。
+// Request is a JSON-RPC request.
 type Request struct {
 	ID     uint64         `json:"id"`
 	Method string         `json:"method"`
 	Params map[string]any `json:"params,omitempty"`
 }
 
-// Response 是一条 JSON-RPC 响应（result 原样保留）。
+// Response is a JSON-RPC response preserving the raw result.
 type Response struct {
 	ID     uint64          `json:"id"`
 	Result json.RawMessage `json:"result,omitempty"`
 	Error  json.RawMessage `json:"error,omitempty"`
 }
 
-// Transport 封装 MCP JSON-RPC 往返（stdio / SSE 等实现）。
+// Transport implements MCP JSON-RPC round trips over stdio, SSE, or other transports.
 type Transport interface {
-	// RoundTrip 发送一条请求，返回对应响应。
+	// RoundTrip sends a request and returns its matching response.
 	RoundTrip(ctx context.Context, req Request) (Response, error)
 }
 
@@ -57,18 +50,18 @@ type Transport interface {
 // MCPClient
 // ============================================================================
 
-// Client 是 MCP 客户端：初始化 → 列工具 → 调工具。
+// Client initializes MCP, lists tools, and invokes tools.
 type Client struct {
 	transport Transport
 	sessionID string
 }
 
-// NewClient 创建 MCP 客户端。
+// NewClient creates an MCP client.
 func NewClient(t Transport) *Client {
 	return &Client{transport: t}
 }
 
-// Initialize 执行 MCP 初始化握手。
+// Initialize performs the MCP initialization handshake.
 func (c *Client) Initialize(ctx context.Context) error {
 	resp, err := c.transport.RoundTrip(ctx, Request{ID: 1, Method: "initialize", Params: map[string]any{
 		"protocolVersion": "2025-06-18",
@@ -80,7 +73,7 @@ func (c *Client) Initialize(ctx context.Context) error {
 	if len(resp.Error) > 0 {
 		return fmt.Errorf("mcp: initialize error: %s", resp.Error)
 	}
-	// 从 result 取 sessionId（可选）。
+	// Read the optional sessionId from the result.
 	var initRes struct {
 		SessionID string `json:"sessionId,omitempty"`
 	}
@@ -89,7 +82,7 @@ func (c *Client) Initialize(ctx context.Context) error {
 	return nil
 }
 
-// ListTools 列出 MCP 服务器暴露的全部工具。
+// ListTools returns all tools exposed by the MCP server.
 func (c *Client) ListTools(ctx context.Context) ([]MCPSchema, error) {
 	resp, err := c.transport.RoundTrip(ctx, Request{ID: 2, Method: "tools/list"})
 	if err != nil {
@@ -107,7 +100,7 @@ func (c *Client) ListTools(ctx context.Context) ([]MCPSchema, error) {
 	return out.Tools, nil
 }
 
-// CallTool 调用 MCP 工具并返回文本结果。
+// CallTool invokes an MCP tool and returns text output.
 func (c *Client) CallTool(ctx context.Context, name string, input map[string]any) (string, error) {
 	resp, err := c.transport.RoundTrip(ctx, Request{ID: 3, Method: "tools/call", Params: map[string]any{
 		"name": name, "arguments": input,
@@ -144,17 +137,17 @@ func (c *Client) CallTool(ctx context.Context, name string, input map[string]any
 // ToolBridge：MCP → pkg/tools.Tool
 // ============================================================================
 
-// Bridge 把 MCP 服务器工具映射为 pkg/tools.Tool。
+// Bridge maps MCP server tools to pkg/tools.Tool.
 type Bridge struct {
 	client *Client
 }
 
-// NewBridge 创建桥接器。
+// NewBridge creates a tool bridge.
 func NewBridge(client *Client) *Bridge {
 	return &Bridge{client: client}
 }
 
-// ToTool 将一条 MCP 工具 schema 映射为等价 tool（Execute 包装 CallTool）。
+// ToTool converts a schema to a tool whose Execute wraps CallTool.
 func (b *Bridge) ToTool(schema MCPSchema) (*tools.Tool, error) {
 	node, err := MapSchema(schema.InputSchema)
 	if err != nil {
@@ -176,7 +169,7 @@ func (b *Bridge) ToTool(schema MCPSchema) (*tools.Tool, error) {
 	}, nil
 }
 
-// ToolRegistry 把已列出的工具批量注册为 *tools.Tool。
+// ToolRegistry registers listed tools as *tools.Tool values.
 func (b *Bridge) ToTools(schemas []MCPSchema) ([]*tools.Tool, error) {
 	out := make([]*tools.Tool, 0, len(schemas))
 	for _, s := range schemas {
@@ -189,9 +182,9 @@ func (b *Bridge) ToTools(schemas []MCPSchema) ([]*tools.Tool, error) {
 	return out, nil
 }
 
-// MapSchema 把通用 JSON Schema map 映射为强校验子集 JsonSchemaNode（M48 子集）。
-// 仅映射子集支持的关键字：type/properties/required/items/enum/description/const/default。
-// 遇到不支持的（如 anyOf）返回错误（fail-closed）。
+// MapSchema converts JSON Schema maps to the validated M48 JsonSchemaNode subset.
+// Only type, properties, required, items, enum, description, const, and default
+// are mapped. Unsupported keywords such as anyOf fail closed.
 func MapSchema(m map[string]any) (*tools.JsonSchemaNode, error) {
 	if m == nil {
 		return nil, nil
@@ -255,7 +248,7 @@ func MapSchema(m map[string]any) (*tools.JsonSchemaNode, error) {
 	return node, nil
 }
 
-// mapType 映射 MCP/JSON 类型到强校验子集类型。
+// mapType maps MCP/JSON types to validated subset types.
 func mapType(t string) (tools.SchemaType, error) {
 	switch t {
 	case "string":
@@ -277,7 +270,7 @@ func mapType(t string) (tools.SchemaType, error) {
 	}
 }
 
-// checkUnsupported 对不支持的关键字 fail-closed。
+// checkUnsupported fails closed on unsupported keywords.
 func checkUnsupported(m map[string]any) error {
 	for k := range m {
 		switch k {

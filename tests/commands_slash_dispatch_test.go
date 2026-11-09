@@ -1,4 +1,4 @@
-// 本文件对应任务 M15/M41：Commands(slash 命令)。
+// M15/M41 slash command tests.
 package tests
 
 import (
@@ -11,7 +11,7 @@ import (
 	"github.com/herlanai/omnix/pkg/session"
 )
 
-// TestCommandsSlashDispatch 验证 /plan off 通过 command 直接写 plan/mode(off) 事件而非 user/message。
+// TestCommandsSlashDispatch makes /plan off append plan/mode(off), not user/message.
 func TestCommandsSlashDispatch(t *testing.T) {
 	reg := commands.NewRegistry()
 	sl := session.NewSessionLog(brand.NewSessionID("cmd_1"))
@@ -24,7 +24,7 @@ func TestCommandsSlashDispatch(t *testing.T) {
 		t.Fatalf("输出应含 off: %q", out)
 	}
 
-	// 应写 command/run 与 command/done 事件
+	// Both command/run and command/done must be recorded.
 	hasRun, hasDone, hasPlanMode := false, false, false
 	for _, ev := range sl.Events() {
 		switch ev.Type {
@@ -40,7 +40,7 @@ func TestCommandsSlashDispatch(t *testing.T) {
 		t.Fatalf("应写 command/run + command/done + plan/mode: run=%v done=%v plan=%v", hasRun, hasDone, hasPlanMode)
 	}
 
-	// 不应出现 user/message（计划变更不应当作对话消息）
+	// A plan change must not generate a user/message event.
 	for _, ev := range sl.Events() {
 		if ev.Type == session.EventUserMessage {
 			t.Fatal("/plan 不应产生 user/message 事件")
@@ -48,7 +48,7 @@ func TestCommandsSlashDispatch(t *testing.T) {
 	}
 }
 
-// TestCommandsUnknown 验证未知命令返回分类错误。
+// TestCommandsUnknown returns a classified error for unknown commands.
 func TestCommandsUnknown(t *testing.T) {
 	reg := commands.NewRegistry()
 	sl := session.NewSessionLog(brand.NewSessionID("cmd_2"))
@@ -62,7 +62,7 @@ func TestCommandsUnknown(t *testing.T) {
 	}
 }
 
-// TestCommandsGoal 验证 /goal 写 goal/change 且 revision 单调递增。
+// TestCommandsGoal verifies goal/change events with monotonically increasing revisions.
 func TestCommandsGoal(t *testing.T) {
 	reg := commands.NewRegistry()
 	sl := session.NewSessionLog(brand.NewSessionID("cmd_3"))
@@ -86,14 +86,14 @@ func TestCommandsGoal(t *testing.T) {
 	}
 }
 
-// TestCommandsListRegister 验证注册与列出。
+// TestCommandsListRegister verifies registration and listing.
 func TestCommandsListRegister(t *testing.T) {
 	reg := commands.NewRegistry()
 	names := reg.List()
 	if len(names) < 2 {
 		t.Fatalf("内置命令应至少 plan/goal: %v", names)
 	}
-	// 字典序
+	// Lexical order.
 	if names[0] != "goal" || names[1] != "plan" {
 		t.Fatalf("命令应按字典序: %v", names)
 	}

@@ -1,4 +1,4 @@
-// Package tests 的 Ralph 循环验收测试。
+// Ralph loop tests.
 package tests
 
 import (
@@ -46,7 +46,7 @@ func TestRalphBudgetLimited(t *testing.T) {
 
 func TestRalphInvalidReport(t *testing.T) {
 	runner := func(_ context.Context, _, _ string) (workflow.RoundReport, error) {
-		// complete 但缺 evidence，应校验失败。
+		// Completion without evidence must fail validation.
 		return workflow.RoundReport{Status: workflow.StatusComplete}, nil
 	}
 	if _, err := workflow.RunRalph(context.Background(), "obj", runner, 3, 0); err == nil {

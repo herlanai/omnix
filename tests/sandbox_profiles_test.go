@@ -1,9 +1,5 @@
-// Package tests 的本地后端 profile 构建验收测试。
-//
-// 覆盖：
-//   - BwrapProfileArgs：bwrap 命令行参数构建
-//   - LandlockProfileArgs：landlock 授权参数构建
-//   - SeatbeltProfileArgs：macOS sandbox-exec SBPL 脚本构建
+// Local backend profile tests cover bwrap arguments, Landlock access arguments, and macOS
+// sandbox-exec SBPL scripts.
 package tests
 
 import (
@@ -14,7 +10,7 @@ import (
 	"github.com/herlanai/omnix/pkg/sandbox"
 )
 
-// TestBwrapProfileReadOnly 验证 bwrap read-only profile。
+// TestBwrapProfileReadOnly verifies the read-only bwrap profile.
 func TestBwrapProfileReadOnly(t *testing.T) {
 	policy := sandbox.SandboxPolicy{
 		SandboxExecutionPolicy: sandbox.SandboxExecutionPolicy{
@@ -24,14 +20,14 @@ func TestBwrapProfileReadOnly(t *testing.T) {
 		Mode: sandbox.ConfinedReadOnly,
 	}
 	args := sandbox.BwrapProfileArgs(policy)
-	// 应包含基础参数
+	// Include the baseline arguments.
 	expected := []string{"--ro-bind", "/", "/", "--dev", "/dev", "--unshare-pid", "--proc", "/proc", "--die-with-parent"}
 	for i, e := range expected {
 		if args[i] != e {
 			t.Fatalf("参数 %d 应为 %q, 实际 %q", i, e, args[i])
 		}
 	}
-	// read-only 不应包含 --bind workspace
+	// read-only must not bind the workspace as writable.
 	for _, a := range args {
 		if a == "--bind" {
 			t.Fatal("read-only 不应包含 --bind")
@@ -39,7 +35,7 @@ func TestBwrapProfileReadOnly(t *testing.T) {
 	}
 }
 
-// TestBwrapProfileWorkspaceWrite 验证 bwrap workspace-write profile。
+// TestBwrapProfileWorkspaceWrite verifies the writable-workspace bwrap profile.
 func TestBwrapProfileWorkspaceWrite(t *testing.T) {
 	policy := sandbox.SandboxPolicy{
 		SandboxExecutionPolicy: sandbox.SandboxExecutionPolicy{
@@ -49,7 +45,7 @@ func TestBwrapProfileWorkspaceWrite(t *testing.T) {
 		Mode: sandbox.ConfinedWorkspaceWrite,
 	}
 	args := sandbox.BwrapProfileArgs(policy)
-	// 应包含 --tmpfs /tmp
+	// Include --tmpfs /tmp.
 	foundTmpfs := false
 	foundBind := false
 	for i, a := range args {
@@ -68,7 +64,7 @@ func TestBwrapProfileWorkspaceWrite(t *testing.T) {
 	}
 }
 
-// TestLandlockProfileReadOnly 验证 landlock read-only profile。
+// TestLandlockProfileReadOnly verifies the read-only Landlock profile.
 func TestLandlockProfileReadOnly(t *testing.T) {
 	policy := sandbox.SandboxPolicy{
 		SandboxExecutionPolicy: sandbox.SandboxExecutionPolicy{
@@ -78,8 +74,7 @@ func TestLandlockProfileReadOnly(t *testing.T) {
 		Mode: sandbox.ConfinedReadOnly,
 	}
 	args := sandbox.LandlockProfileArgs(policy)
-	// read-only：readOnly=[/], readWrite=[/dev/null]
-	// 验证包含 --read-only / 和 --read-write /dev/null
+	// Allow read-only access to / and write access to /dev/null.
 	joined := strings.Join(args, " ")
 	if !strings.Contains(joined, "--read-only /") {
 		t.Fatalf("应包含 --read-only /, 实际: %s", joined)
@@ -87,13 +82,13 @@ func TestLandlockProfileReadOnly(t *testing.T) {
 	if !strings.Contains(joined, "--read-write /dev/null") {
 		t.Fatalf("应包含 --read-write /dev/null, 实际: %s", joined)
 	}
-	// read-only 不应包含 workspaceRoot 在 read-write 中
+	// Do not include workspaceRoot among writable roots in read-only mode.
 	if strings.Contains(joined, "--read-write /workspace") {
 		t.Fatalf("read-only 不应在 read-write 中包含 workspace, 实际: %s", joined)
 	}
 }
 
-// TestLandlockProfileWorkspaceWrite 验证 landlock workspace-write profile。
+// TestLandlockProfileWorkspaceWrite verifies the writable-workspace Landlock profile.
 func TestLandlockProfileWorkspaceWrite(t *testing.T) {
 	policy := sandbox.SandboxPolicy{
 		SandboxExecutionPolicy: sandbox.SandboxExecutionPolicy{
@@ -104,7 +99,7 @@ func TestLandlockProfileWorkspaceWrite(t *testing.T) {
 	}
 	args := sandbox.LandlockProfileArgs(policy)
 	joined := strings.Join(args, " ")
-	// workspace-write：readWrite 应包含 /dev/null, /tmp, workspaceRoot
+	// Writable roots must include /dev/null, /tmp, and workspaceRoot.
 	if !strings.Contains(joined, "--read-write /dev/null") {
 		t.Fatalf("应包含 --read-write /dev/null, 实际: %s", joined)
 	}
@@ -116,7 +111,7 @@ func TestLandlockProfileWorkspaceWrite(t *testing.T) {
 	}
 }
 
-// TestSeatbeltProfileReadOnly 验证 seatbelt read-only SBPL 脚本。
+// TestSeatbeltProfileReadOnly verifies the read-only SBPL script.
 func TestSeatbeltProfileReadOnly(t *testing.T) {
 	if runtime.GOOS != "darwin" {
 		t.Skip("seatbelt 仅在 macOS 上有意义")
@@ -129,11 +124,11 @@ func TestSeatbeltProfileReadOnly(t *testing.T) {
 		Mode: sandbox.ConfinedReadOnly,
 	}
 	args := sandbox.SeatbeltProfileArgs(policy)
-	// 第一个参数应为 -p
+	// The first argument must be -p.
 	if args[0] != "-p" {
 		t.Fatalf("第一个参数应为 -p, 实际 %q", args[0])
 	}
-	// SBPL 脚本应包含基础规则
+	// The SBPL script must include baseline rules.
 	sbpl := args[1]
 	if !strings.Contains(sbpl, "(version 1)") {
 		t.Fatalf("SBPL 应包含 (version 1), 实际: %s", sbpl)
@@ -149,7 +144,7 @@ func TestSeatbeltProfileReadOnly(t *testing.T) {
 	}
 }
 
-// TestSeatbeltProfileWorkspaceWrite 验证 seatbelt workspace-write SBPL 脚本。
+// TestSeatbeltProfileWorkspaceWrite verifies the writable-workspace SBPL script.
 func TestSeatbeltProfileWorkspaceWrite(t *testing.T) {
 	if runtime.GOOS != "darwin" {
 		t.Skip("seatbelt 仅在 macOS 上有意义")
@@ -163,7 +158,7 @@ func TestSeatbeltProfileWorkspaceWrite(t *testing.T) {
 	}
 	args := sandbox.SeatbeltProfileArgs(policy)
 	sbpl := args[1]
-	// workspace-write 应包含 workspaceRoot 的 subpath 授权
+	// Authorize the workspaceRoot subpath for writing.
 	if !strings.Contains(sbpl, "/workspace/app") {
 		t.Fatalf("SBPL 应包含 workspaceRoot, 实际: %s", sbpl)
 	}

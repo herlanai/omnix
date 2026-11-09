@@ -1,7 +1,5 @@
-// 本文件验证任务 S02：Subagent 接缝（in-process fork 后端）。
-//
-// 覆盖：in-process fork 正确执行并返回父→子家谱；父 dispose → 子句柄自动 drain/cleanup；
-// 未注册后端报错；内置 ACP/ForkCopy 桩可运行。
+// S02 subagent tests cover in-process fork execution and lineage, child cleanup on parent
+// disposal, unknown backends, and built-in ACP/ForkCopy stubs.
 package tests
 
 import (
@@ -13,14 +11,14 @@ import (
 	"github.com/herlanai/omnix/pkg/subagent"
 )
 
-// TestSubagentInProcessForkLineage 验证 in-process fork 家谱 parent/session 正确。
+// TestSubagentInProcessForkLineage verifies parent and child session identifiers.
 func TestSubagentInProcessForkLineage(t *testing.T) {
 	ctx := context.Background()
 	parent := brand.NewSessionID("parent-1")
 	captured := ""
 
 	r := subagent.NewRuntime()
-	// 注入 in-process 后端：记录父子家谱并返回输出。
+	// Register an in-process backend that records lineage and returns output.
 	rp := subagent.NewInProcessProvider(func(_ context.Context, req subagent.SpawnRequest) (brand.SessionID, string, error) {
 		sid := brand.NewSessionID("child-1")
 		captured = "parent="
@@ -39,7 +37,7 @@ func TestSubagentInProcessForkLineage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// 家谱 parent/session 正确。
+	// Verify parent and child lineage.
 	if h.Lineage.Parent == nil || *h.Lineage.Parent != parent {
 		t.Fatalf("家谱 parent 应为 %s，实际 %v", parent, h.Lineage.Parent)
 	}
@@ -49,40 +47,40 @@ func TestSubagentInProcessForkLineage(t *testing.T) {
 	if captured != "parent=parent-1/session=child-1" {
 		t.Fatalf("runner 收到的家谱上下文异常: %q", captured)
 	}
-	// Drain 不阻塞（进程内同步完成）。
+	// Drain returns immediately because in-process execution completed synchronously.
 	if err := h.Drain(ctx); err != nil {
 		t.Fatal(err)
 	}
 }
 
-// TestSubagentParentDisposeDrainsChild 验证父 dispose → 子句柄自动 drained/cleanup。
+// TestSubagentParentDisposeDrainsChild cleans up child handles on parent disposal.
 func TestSubagentParentDisposeDrainsChild(t *testing.T) {
 	ctx := context.Background()
 	parent := brand.NewSessionID("parent-2")
 
 	r := subagent.NewRuntime()
-	rp := subagent.NewInProcessProvider(nil) // 默认占位 runner
+	rp := subagent.NewInProcessProvider(nil) // Default placeholder runner.
 	_ = r.RegisterProvider(rp)
 
 	h, err := r.Spawn(ctx, "in-process", subagent.SpawnRequest{Parent: &parent, Input: "t"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	// 父释放名下所有子代理。
+	// Release every subagent owned by the parent.
 	r.DisposeOwner(parent)
-	// 子句柄应被 dispose（drained），Drain 立即返回。
+	// Disposed child handles must drain immediately.
 	done := make(chan error, 1)
 	go func() { done <- h.Drain(ctx) }()
 	select {
 	case <-done:
-		// 释放后 Drain 返回（不阻塞）。
+		// Drain must not block after disposal.
 		_ = h.Drain(ctx)
 	case <-time.After(2 * time.Second):
 		t.Fatal("父 dispose 后子句柄应能 drain，超时未返回")
 	}
 }
 
-// TestSubagentUnknownProvider 验证未注册后端报错。
+// TestSubagentUnknownProvider rejects unregistered backends.
 func TestSubagentUnknownProvider(t *testing.T) {
 	r := subagent.NewRuntime()
 	_, err := r.Spawn(context.Background(), "no-such", subagent.SpawnRequest{Input: "x"})
@@ -91,7 +89,7 @@ func TestSubagentUnknownProvider(t *testing.T) {
 	}
 }
 
-// TestSubagentBuiltinStubs 验证内置 ACP/ForkCopy 桩可运行。
+// TestSubagentBuiltinStubs exercises built-in ACP and ForkCopy stubs.
 func TestSubagentBuiltinStubs(t *testing.T) {
 	r := subagent.NewRuntime()
 	for _, name := range []string{"acp", "fork-copy"} {
@@ -103,7 +101,7 @@ func TestSubagentBuiltinStubs(t *testing.T) {
 			t.Fatalf("%s 句柄 provider 应为 %s，实际 %s", name, name, h.Provider)
 		}
 	}
-	// 共 2 个句柄登记（acp + fork-copy）。
+	// Two handles are registered: acp and fork-copy.
 	if r.ActiveCount() != 2 {
 		t.Fatalf("应有 2 个句柄登记，实际 %d", r.ActiveCount())
 	}

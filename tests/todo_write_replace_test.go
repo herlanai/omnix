@@ -1,4 +1,4 @@
-// 本文件对应任务 M13：Todo 整体替换写入。
+// M13 whole-list todo replacement tests.
 package tests
 
 import (
@@ -11,12 +11,12 @@ import (
 	"github.com/herlanai/omnix/pkg/todo"
 )
 
-// TestTodoWriteReplace 验证多次 todo/write 每次整体替换（last-write-wins）。
+// TestTodoWriteReplace verifies last-write-wins replacement on every todo/write.
 func TestTodoWriteReplace(t *testing.T) {
 	sl := session.NewSessionLog(brand.NewSessionID("todo_1"))
 	tool := todo.NewTodoWriteTool(sl)
 
-	// 第一次整体替换
+	// First whole-list replacement.
 	_, err := tool.Execute(context.Background(), map[string]any{
 		"items": []any{
 			map[string]any{"content": "a"},
@@ -30,7 +30,7 @@ func TestTodoWriteReplace(t *testing.T) {
 		t.Fatalf("第一次替换结果 = %v, want [a b]", got)
 	}
 
-	// 第二次整体替换（覆盖为仅一项）
+	// Second replacement leaves only one item.
 	_, err = tool.Execute(context.Background(), map[string]any{
 		"items": []any{
 			map[string]any{"content": "c"},
@@ -43,7 +43,7 @@ func TestTodoWriteReplace(t *testing.T) {
 		t.Fatalf("第二次应整体替换为 [c], got %v", got)
 	}
 
-	// 空列表替换：清空
+	// An empty replacement clears the list.
 	_, err = tool.Execute(context.Background(), map[string]any{"items": []any{}})
 	if err != nil {
 		t.Fatalf("清空执行失败: %v", err)
@@ -52,14 +52,14 @@ func TestTodoWriteReplace(t *testing.T) {
 		t.Fatalf("清空后应为空, got %v", got)
 	}
 
-	// fold 语义为整体替换（last-write-wins）：只保留最新
+	// Last-write-wins folding retains only the latest complete list.
 	fold := session.FoldTodoWrite(sl.Events())
 	if !fold.Present || len(fold.Items) != 0 {
 		t.Fatalf("fold 应反映最新空列表: %+v", fold)
 	}
 }
 
-// contentsOf 提取待办的内容列表。
+// contentsOf extracts todo content strings.
 func contentsOf(items []todo.TodoItem) []string {
 	out := make([]string, len(items))
 	for i, it := range items {

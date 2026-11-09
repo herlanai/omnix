@@ -1,16 +1,9 @@
-// 本文件实现任务 S06：Authorization Service（OAuth 流 stub）。
-//
-// 对齐上游：packages/credentials/authorization
-//
-// 说明：M39 已提供 AuthorizationService 注册原语（Register/List/Begin/Cancel 的 flow
-// 载体）。S06 在此基础上补齐「流程生命周期」的 stub 语义：
-//   - AuthService 持有一次性回调 token：Begin → 创建 pending session 并返回 token；
-//   - Complete(token, value) 模拟「OAuth 回调拿到凭据」：把 value 写入凭证 Store
-//     （store.Set），session 进入 completed —— 之后 M39 的 Resolve 即可解析到该凭证；
-//   - Cancel 取消 pending session（并调用 flow.Cancel）；
-//
-// 生产环境接入真实浏览器/SDK 时，只需把 Complete 换成真实回调端点即可，本 stub
-// 保持接口稳定。
+// Authorization lifecycle stub (S06), matching credentials/authorization.
+// M39 supplies flow registration and Begin/Cancel. AuthService adds one-time
+// callback tokens: Begin creates a pending session; Complete stores credentials
+// and marks it completed so Resolve can read them; Cancel cancels pending sessions
+// and invokes flow.Cancel. A real browser/SDK integration can supply a callback
+// endpoint while retaining this interface.
 package credentials
 
 import (
@@ -23,44 +16,40 @@ import (
 	"github.com/herlanai/omnix/pkg/brand"
 )
 
-// ============================================================================
-// 会话状态
-// ============================================================================
+// Session state.
 
-// AuthStatus 是授权会话状态。
+// AuthStatus identifies an authorization session state.
 type AuthStatus string
 
-// 授权会话状态枚举。
+// Authorization session states.
 const (
-	AuthPending   AuthStatus = "pending"   // 等待回调
-	AuthCompleted AuthStatus = "completed" // 凭证已写入
-	AuthCancelled AuthStatus = "cancelled" // 已取消
+	AuthPending   AuthStatus = "pending"   // Waiting for a callback.
+	AuthCompleted AuthStatus = "completed" // Credentials have been stored.
+	AuthCancelled AuthStatus = "cancelled" // Canceled.
 )
 
-// AuthSession 是一条授权流程会话记录。
+// AuthSession records an authorization flow session.
 type AuthSession struct {
-	ID        string       `json:"id"`
-	FlowID    FlowID       `json:"flowId"`
-	Status    AuthStatus   `json:"status"`
-	StartedAt time.Time    `json:"startedAt"`
-	CredRef   brand.CredentialRef `json:"credRef,omitempty"` // 回调写入的凭证引用
-	HasValue  bool         `json:"hasValue"`
+	ID        string              `json:"id"`
+	FlowID    FlowID              `json:"flowId"`
+	Status    AuthStatus          `json:"status"`
+	StartedAt time.Time           `json:"startedAt"`
+	CredRef   brand.CredentialRef `json:"credRef,omitempty"` // Credential reference written by the callback.
+	HasValue  bool                `json:"hasValue"`
 }
 
-// ============================================================================
-// AuthService：OAuth 流 stub
-// ============================================================================
+// AuthService: OAuth flow stub.
 
-// AuthService 编排「begin → 回调 → resolved credential」的授权流程 stub。
+// AuthService orchestrates begin, callback, and credential resolution.
 type AuthService struct {
 	auth     *AuthorizationService
 	store    *Store
 	mu       sync.Mutex
-	sessions map[string]*AuthSession // sessionID → 状态
+	sessions map[string]*AuthSession // Session ID to state.
 	next     int
 }
 
-// NewAuthService 创建授权服务 stub，绑定底层 flow 注册表与凭证存储。
+// NewAuthService binds the flow registry and credential store.
 func NewAuthService(auth *AuthorizationService, store *Store) *AuthService {
 	return &AuthService{
 		auth:     auth,
@@ -69,16 +58,16 @@ func NewAuthService(auth *AuthorizationService, store *Store) *AuthService {
 	}
 }
 
-// newSessionID 生成自增会话 ID。
+// newSessionID generates an incrementing session ID.
 func (s *AuthService) newSessionID() string {
 	s.next++
 	return fmt.Sprintf("auth-%04d", s.next)
 }
 
-// Begin 启动指定授权流，返回一次性回调 token。
-// 适用范围：list flows → begin(token) → 外部完成 → Complete(token, value)。
+// Begin starts a flow and returns a one-time callback token.
+// Typical flow: list flows, begin, complete externally, then Complete(token, value).
 func (s *AuthService) Begin(ctx context.Context, flowID FlowID) (token string, err error) {
-	// 触发 flow 的 Begin（得到授权提示/URL），失败则整体失败。
+	// Start the flow to obtain a prompt or URL; failure aborts the whole operation.
 	hint, err := s.auth.Begin(ctx, flowID)
 	if err != nil {
 		return "", err
@@ -93,8 +82,8 @@ func (s *AuthService) Begin(ctx context.Context, flowID FlowID) (token string, e
 	return id, nil
 }
 
-// Complete 模拟 OAuth 回调：把 value 写入凭证 Store，会话进入 completed。
-// 后续 M39 的 Resolve(flowID 对应的 ref) 即可取到 value。
+// Complete simulates an OAuth callback: store value and mark the session completed.
+// Resolve can then retrieve it using the flow's credential reference.
 func (s *AuthService) Complete(ctx context.Context, token string, value string) error {
 	s.mu.Lock()
 	sess, ok := s.sessions[token]
@@ -106,11 +95,11 @@ func (s *AuthService) Complete(ctx context.Context, token string, value string) 
 		s.mu.Unlock()
 		return fmt.Errorf("credentials: auth session %q already %s", token, sess.Status)
 	}
-	// 凭证引用 = flow ID（约定）。
+	// By convention, the credential reference is the flow ID.
 	ref := sess.FlowID
 	s.mu.Unlock()
 
-	// 写入凭证存储（CAS），成功后标记 completed。
+	// Store credentials using CAS, then mark completion on success.
 	if err := s.store.Set(ctx, ref, value); err != nil {
 		return err
 	}
@@ -122,7 +111,7 @@ func (s *AuthService) Complete(ctx context.Context, token string, value string) 
 	return nil
 }
 
-// Cancel 取消 pending 会话（并调用 flow.Cancel）。
+// Cancel cancels a pending session and calls flow.Cancel.
 func (s *AuthService) Cancel(ctx context.Context, token string) error {
 	s.mu.Lock()
 	sess, ok := s.sessions[token]
@@ -138,11 +127,11 @@ func (s *AuthService) Cancel(ctx context.Context, token string) error {
 	sess.Status = AuthCancelled
 	s.mu.Unlock()
 
-	// 调用底层 flow 的 Cancel（stub 可无操作）。
+	// Invoke the underlying flow cancellation, which may be a no-op for stubs.
 	return s.auth.Cancel(ctx, flowID)
 }
 
-// Status 返回指定会话状态。
+// Status returns the state of a session.
 func (s *AuthService) Status(token string) (AuthSession, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -154,7 +143,7 @@ func (s *AuthService) Status(token string) (AuthSession, bool) {
 	return cp, true
 }
 
-// List 列出全部会话（按 ID 字典序，确定性）。
+// List returns all sessions deterministically in lexical ID order.
 func (s *AuthService) List() []AuthSession {
 	s.mu.Lock()
 	defer s.mu.Unlock()

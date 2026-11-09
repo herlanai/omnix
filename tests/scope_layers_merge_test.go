@@ -1,4 +1,4 @@
-// 本文件对应任务 M03：Scope 分层注册表原语。
+// M03 scoped registry primitives.
 package tests
 
 import (
@@ -8,9 +8,9 @@ import (
 	"github.com/herlanai/omnix/pkg/scope"
 )
 
-// TestScopeNearestWins 验证 host + scope 叠加后读取优先级（nearest-scope-wins）。
+// TestScopeNearestWins verifies nearest-scope precedence over host definitions.
 func TestScopeNearestWins(t *testing.T) {
-	// 场景：宿主级定义了工具 "bash"，会话级覆盖为限制版
+	// The host defines bash and the session overrides it with a restricted version.
 	host := scope.NewLayer[string](scope.Key("host"))
 	host.Register("bash", "host/bash:full", 0)
 
@@ -18,10 +18,10 @@ func TestScopeNearestWins(t *testing.T) {
 	session.Register("bash", "session/bash:restricted", 0)
 
 	layers := scope.NewScopedLayers[string]().
-		Push(host). // host 最先
+		Push(host). // Resolve the host first.
 		Push(session)
 
-	// 最近作用域（session）应覆盖 host
+	// The nearest session scope must override the host.
 	got, ok := layers.Get("bash")
 	if !ok {
 		t.Fatal("bash 应可解析")
@@ -30,61 +30,61 @@ func TestScopeNearestWins(t *testing.T) {
 		t.Fatalf("nearest-scope-wins 失效: got %q", got)
 	}
 
-	// 只解析 host 中独有的 key
+	// Resolve a key defined only at host level.
 	host.Register("ls", "host/ls", 0)
 	got, ok = layers.Get("ls")
 	if !ok || got != "host/ls" {
 		t.Fatalf("host 独有 key 解析失败: got %q ok=%v", got, ok)
 	}
 
-	// 不存在的 key
+	// Missing key.
 	if _, ok := layers.Get("nope"); ok {
 		t.Fatal("不存在的 key 不应解析成功")
 	}
 }
 
-// TestScopeRankTiebreak 验证同层内 rank 大者胜、rank 相同后注册覆盖先注册。
+// TestScopeRankTiebreak prefers higher rank, then later registration at equal rank.
 func TestScopeRankTiebreak(t *testing.T) {
 	layer := scope.NewLayer[int](scope.Key("session:s1"))
 
-	// 相同 rank：后注册覆盖先注册
+	// At equal rank, later registration wins.
 	layer.Register("toolA", 1, 0)
-	layer.Register("toolA", 2, 0) // 后注册
+	layer.Register("toolA", 2, 0) // Register later.
 
-	// 通过 ScopedLayers 解析
+	// Resolve through ScopedLayers.
 	layers := scope.NewScopedLayers[int]().Push(layer)
 	if v, ok := layers.Get("toolA"); !ok || v != 2 {
 		t.Fatalf("rank 相同应后注册覆盖: got %d ok=%v", v, ok)
 	}
 
-	// 更高 rank 覆盖后注册
+	// Higher rank wins over later registration.
 	layer.Register("toolB", 10, 1)
-	layer.Register("toolB", 20, 0) // 后注册但 rank 低
+	layer.Register("toolB", 20, 0) // Registered later but with lower rank.
 	if v, ok := layers.Get("toolB"); !ok || v != 10 {
 		t.Fatalf("rank 大者胜: got %d ok=%v", v, ok)
 	}
 }
 
-// TestScopeAnonymousNotConflict 验证匿名 entry 与 named entry 互不冲突。
+// TestScopeAnonymousNotConflict keeps anonymous and named entries independent.
 func TestScopeAnonymousNotConflict(t *testing.T) {
 	layer := scope.NewLayer[string](scope.Key("host"))
-	// 具名条目
+	// Named entry.
 	layer.Register("bash", "named-bash", 0)
-	// 匿名条目（name 为空）
+	// Anonymous entry with an empty name.
 	layer.Register("", "anonymous-default", 0)
 
 	layers := scope.NewScopedLayers[string]().Push(layer)
 
-	// 匿名条目不参与具名查找：Get("bash") 仍命中具名条目，匿名条目不影响
+	// Anonymous entries do not participate in named lookup; Get("bash") still finds the named entry.
 	if v, ok := layers.Get("bash"); !ok || v != "named-bash" {
 		t.Fatalf("具名查找应命中具名条目: got %q ok=%v", v, ok)
 	}
-	// 用空串查找不应命中（匿名不参与 lookup）
+	// Looking up an empty string must not match an anonymous entry.
 	if _, ok := layers.Get(""); ok {
 		t.Fatal("空串查找不应命中")
 	}
 
-	// Merge 后匿名条目应保留（与具名条目共存）
+	// Merge retains anonymous entries alongside named entries.
 	merged := layers.Merge()
 	hasAnon, hasNamed := false, false
 	for _, e := range merged {
@@ -100,7 +100,7 @@ func TestScopeAnonymousNotConflict(t *testing.T) {
 	}
 }
 
-// TestScopeMergeDeterministic 验证 Merge 输出确定性（多次调用逐项一致）。
+// TestScopeMergeDeterministic verifies identical entry order across repeated merges.
 func TestScopeMergeDeterministic(t *testing.T) {
 	host := scope.NewLayer[string](scope.Key("host"))
 	host.Register("zebra", "z", 0)
@@ -122,7 +122,7 @@ func TestScopeMergeDeterministic(t *testing.T) {
 		}
 	}
 
-	// 具名条目应字典序排列
+	// Named entries must be in lexical order.
 	var names []string
 	for _, e := range first {
 		if e.Name != "" {

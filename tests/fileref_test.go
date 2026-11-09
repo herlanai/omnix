@@ -1,4 +1,4 @@
-// Package tests 的 fileref @引用语法验收测试。
+// File-reference @ syntax tests.
 package tests
 
 import (

@@ -1,6 +1,6 @@
-// interpolate.go 复刻官方 system-prompt 的严格变量插值：把文本中完整的
-// {{name}} 组替换为 variables 中的值，变量名须为 [a-z][a-z0-9_]*，未知或无值
-// 变量报错，替换进去的值不再二次扫描；没有后续 }} 的孤立 {{ 作为字面文本。
+// Strict system-prompt interpolation replaces complete {{name}} groups using
+// variables with names matching [a-z][a-z0-9_]*. Unknown or missing values fail.
+// Replacement values are not rescanned; an unmatched {{ remains literal text.
 package sysprompt
 
 import (
@@ -11,7 +11,7 @@ import (
 
 var variableName = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 
-// Interpolate 对 text 做严格变量插值。
+// Interpolate performs strict variable interpolation on text.
 func Interpolate(text string, variables map[string]string) (string, error) {
 	var b strings.Builder
 	last := 0
@@ -22,16 +22,16 @@ func Interpolate(text string, variables map[string]string) (string, error) {
 			break
 		}
 		open += last
-		// 从 open 起找第一个 "}}"。
+		// Find the first closing delimiter after open.
 		relClose := strings.Index(text[open:], "}}")
 		if relClose < 0 {
-			// 没有闭合：剩余作为字面文本。
+			// Without a closing delimiter, preserve the remainder literally.
 			b.WriteString(text[last:])
 			break
 		}
 		closeEnd := open + relClose + 2
 		name := text[open+2 : open+relClose]
-		// open 与 }} 之间若还含 {{，属于畸形嵌套。
+		// Another opening delimiter before the close is malformed nesting.
 		if strings.Contains(name, "{{") {
 			return "", errors.New("malformed variable reference near " + text[open:min(closeEnd, len(text))])
 		}
@@ -43,7 +43,7 @@ func Interpolate(text string, variables map[string]string) (string, error) {
 			return "", errors.New("unknown variable: " + name)
 		}
 		b.WriteString(text[last:open])
-		b.WriteString(value) // 替换值不再扫描
+		b.WriteString(value) // Do not rescan replacement values.
 		last = closeEnd
 	}
 	return b.String(), nil

@@ -1,4 +1,4 @@
-// Package tests 的 ModelSelection（model_selection.go）验收测试。
+// ModelSelection acceptance tests.
 package tests
 
 import (
@@ -16,7 +16,7 @@ func TestModelSelectionCaptureFreezes(t *testing.T) {
 		t.Fatal("capture should freeze current selection")
 	}
 
-	// 捕获后再切换 current，不影响已捕获的 assembled
+	// Changing current after capture must not affect the assembled selection.
 	r.Select(&agent.ModelSelection{Provider: "openai", Model: "gpt"})
 	assembled := r.Assembled()
 	if assembled.Provider != "deepseek" {
@@ -37,7 +37,7 @@ func TestModelSelectionApplyOverridesRequest(t *testing.T) {
 
 func TestModelSelectionApplyClearsInheritedEffortWhenAbsent(t *testing.T) {
 	r := agent.NewModelSelectionRef()
-	r.Select(&agent.ModelSelection{Provider: "p", Model: "m"}) // 无 effort
+	r.Select(&agent.ModelSelection{Provider: "p", Model: "m"}) // No effort configured.
 	r.Capture()
 
 	out := r.Apply(agent.RequestConfig{ReasoningEffort: "inherited"})

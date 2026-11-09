@@ -1,4 +1,4 @@
-// Package tests 的 homepath 验收测试。
+// Home-path resolution tests.
 package tests
 
 import (
@@ -10,7 +10,7 @@ import (
 )
 
 func TestResolveOmnixHomeDefault(t *testing.T) {
-	// 空白 env 视为未设置，退回 ~/.omnix。
+	// Treat a whitespace-only environment value as unset and fall back to ~/.omnix.
 	got, err := homepath.Resolve("", map[string]string{homepath.EnvName: "   "})
 	if err != nil {
 		t.Fatal(err)

@@ -1,4 +1,4 @@
-// Package tests 的 todo 三态生命周期验收测试。
+// Todo three-state lifecycle tests.
 package tests
 
 import (

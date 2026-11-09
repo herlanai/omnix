@@ -1,4 +1,4 @@
-// 本文件对应任务 M32：Agent Preset 接缝。
+// M32: Agent preset integration.
 package tests
 
 import (
@@ -7,17 +7,17 @@ import (
 	"github.com/herlanai/omnix/pkg/presets"
 )
 
-// TestAgentPresetCompose 验证不同 preset 组合为独立 tools/prompt。
+// TestAgentPresetCompose verifies independent tool/prompt compositions for different presets.
 func TestAgentPresetCompose(t *testing.T) {
 	code := &presets.AgentPreset{Key: "code", Tools: []string{"bash", "fs_read"}, Prompt: "你是编码助手"}
 	research := &presets.AgentPreset{Key: "research", Tools: []string{"web_fetch"}, Prompt: "你是研究员"}
 
-	// 组合两者
+	// Compose both presets.
 	combo := presets.ComposeFrom("code_research", code, research)
 	if len(combo.Tools) != 3 {
 		t.Fatalf("组合工具数 = %d, want 3: %v", len(combo.Tools), combo.Tools)
 	}
-	// 工具应字典序
+	// Tools must be in lexical order.
 	if combo.Tools[0] != "bash" || combo.Tools[2] != "web_fetch" {
 		t.Fatalf("工具排序异常: %v", combo.Tools)
 	}
@@ -26,7 +26,7 @@ func TestAgentPresetCompose(t *testing.T) {
 	}
 }
 
-// TestAgentPresetMountSelect 验证挂载后 Select 按 key 取到独立组合。
+// TestAgentPresetMountSelect retrieves independent mounted compositions by key.
 func TestAgentPresetMountSelect(t *testing.T) {
 	reg := presets.NewPresetRegistry()
 
@@ -38,13 +38,13 @@ func TestAgentPresetMountSelect(t *testing.T) {
 		t.Fatalf("Select(code) 异常: %+v ok=%v", got, ok)
 	}
 
-	// 未挂载的 key 取不到
+	// An unmounted key cannot be selected.
 	if _, ok := reg.Select("nope"); ok {
 		t.Fatal("未挂载 key 不应被选中")
 	}
 }
 
-// TestAgentPresetIndependence 验证不同 preset 挂载后互不干扰（每个 Agent 独立组合）。
+// TestAgentPresetIndependence verifies that mounted presets do not interfere across Agents.
 func TestAgentPresetIndependence(t *testing.T) {
 	reg := presets.NewPresetRegistry()
 	reg.Mount(&presets.AgentPreset{Key: "a", Tools: []string{"t1"}, Prompt: "A"})
@@ -53,7 +53,7 @@ func TestAgentPresetIndependence(t *testing.T) {
 	pa, _ := reg.Select("a")
 	pb, _ := reg.Select("b")
 
-	// 修改 pa 不应影响 pb（组合按值复制）
+	// Modifying pa must not affect pb because composition copies values.
 	if len(pa.Tools) != 1 || len(pb.Tools) != 1 {
 		t.Fatalf("两 preset 应相互独立: a=%v b=%v", pa.Tools, pb.Tools)
 	}

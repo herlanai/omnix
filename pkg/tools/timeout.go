@@ -1,10 +1,7 @@
-// 本文件复刻官方 guard/timeout-policy：协作式工具调用超时。工具声明 TimeoutMs 并
-// 承诺尊重 ctx；包装器武装截止时间，自己的计时器触发时把结果映射为结构化
-// TOOL_TIMEOUT，而不是与工具的执行相互竞争或丢弃。
-//
-// Go 的固有限制：无法强杀 goroutine。超时后包装器立即返回 TOOL_TIMEOUT，被调用的
-// goroutine 只有在尊重 ctx 时才会退出；不尊重则会继续在后台运行（可能泄漏）。因此
-// 这是"协作式"超时——工具实现必须监听 ctx.Done()。
+// Cooperative timeouts mirror upstream guard/timeout-policy. Tools declare TimeoutMs and must
+// honor ctx.Done(). The wrapper returns structured TOOL_TIMEOUT only when its own timer expires.
+// Go cannot forcibly stop a goroutine: a tool ignoring cancellation may continue in the
+// background and leak resources after the wrapper returns.
 package tools
 
 import (
@@ -13,28 +10,28 @@ import (
 	"time"
 )
 
-// ToolTimeoutCode 是超时的结构化错误码（对齐官方 TOOL_TIMEOUT）。
+// ToolTimeoutCode is the stable TOOL_TIMEOUT error code.
 const ToolTimeoutCode = "TOOL_TIMEOUT"
 
-// ErrToolTimeout 表示工具调用超过自身声明的预算。
+// ErrToolTimeout reports that a tool exceeded its declared time budget.
 var ErrToolTimeout = errors.New("tool call timed out")
 
-// TimeoutError 是超时的结构化错误，携带 TOOL_TIMEOUT 码供重试/沙箱层路由。
+// TimeoutError carries TOOL_TIMEOUT for retry and sandbox routing.
 type TimeoutError struct {
-	Code  string
+	Code   string
 	Budget time.Duration
-	Cause error
+	Cause  error
 }
 
-// Error 实现 error。
+// Error implements error.
 func (e *TimeoutError) Error() string {
 	return "tool call timed out after " + e.Budget.String()
 }
 
-// Unwrap 支持 errors.Is/As。
+// Unwrap supports errors.Is and errors.As.
 func (e *TimeoutError) Unwrap() error { return e.Cause }
 
-// WrapTimeout 用 timeoutMs 包装一个执行函数；timeoutMs<=0 时原样返回。
+// WrapTimeout applies timeoutMs to an execution function; nonpositive values leave it unchanged.
 func WrapTimeout(exec ToolExecuteFunc, timeoutMs int) ToolExecuteFunc {
 	if exec == nil || timeoutMs <= 0 {
 		return exec
@@ -58,8 +55,8 @@ func WrapTimeout(exec ToolExecuteFunc, timeoutMs int) ToolExecuteFunc {
 		case o := <-done:
 			return o.value, o.err
 		case <-timerCtx.Done():
-			// 仅当是【本层】计时器到期才映射为 TOOL_TIMEOUT；上游 ctx 取消
-			// （父 deadline 先触发）按普通取消处理。
+			// Map only this wrapper's expired timer to TOOL_TIMEOUT. Parent cancellation or an earlier
+			// parent deadline remains an ordinary context error.
 			if errors.Is(timerCtx.Err(), context.DeadlineExceeded) && ctx.Err() == nil {
 				return nil, &TimeoutError{Code: ToolTimeoutCode, Budget: budget, Cause: ErrToolTimeout}
 			}

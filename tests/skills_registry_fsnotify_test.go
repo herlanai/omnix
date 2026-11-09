@@ -1,10 +1,6 @@
-// Package tests 的 Skill 系统（M40）验收测试。
-//
-// 覆盖：
-//   - 新建 <proj>/.omnix/skills/my-skill.md → 下一次 List() 出现；删除后下一次不出现
-//   - 6 层 rank：同名高权威胜（project-omnix(0) > bundled(5)）
-//   - skill(name) 工具解析注入 injected-context + modelInvocable/userInvocable 策略
-//   - Watch 轮询：目录变更触发 onChange
+// M40 skill tests cover dynamic discovery/removal under .omnix/skills, six-layer authority with
+// project-omnix rank 0 above bundled rank 5, tool injection and invocation policy, and polling
+// change notifications.
 package tests
 
 import (
@@ -17,7 +13,7 @@ import (
 	"github.com/herlanai/omnix/pkg/skills"
 )
 
-// writeSkill 写一个技能 md 文件。
+// writeSkill writes a skill Markdown file.
 func writeSkill(t *testing.T, dir, name, body string) {
 	t.Helper()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -28,19 +24,19 @@ func writeSkill(t *testing.T, dir, name, body string) {
 	}
 }
 
-// TestSkillRegistryDynamicDiscovery 验证新建/删除技能后 List 反映变化。
+// TestSkillRegistryDynamicDiscovery reflects skill creation and removal in List.
 func TestSkillRegistryDynamicDiscovery(t *testing.T) {
 	root := t.TempDir()
 	r := skills.New(root)
 	projSkills := filepath.Join(root, ".omnix", "skills")
 
-	// 初始空。
+	// Initially empty.
 	r.Scan()
 	if got := len(r.List()); got != 0 {
 		t.Fatalf("初始应为空, 实际 %d", got)
 	}
 
-	// 新建 my-skill.md → 下一次 List 出现。
+	// Creating my-skill.md makes it appear in the next List.
 	writeSkill(t, projSkills, "my-skill", "do the thing")
 	r.Scan()
 	if _, ok := r.Get("my-skill"); !ok {
@@ -50,7 +46,7 @@ func TestSkillRegistryDynamicDiscovery(t *testing.T) {
 		t.Fatalf("应有 1 个技能, 实际 %d", len(r.List()))
 	}
 
-	// 删除 → 下一次不再出现。
+	// Deleting it removes it from the next List.
 	if err := os.Remove(filepath.Join(projSkills, "my-skill.md")); err != nil {
 		t.Fatal(err)
 	}
@@ -60,7 +56,7 @@ func TestSkillRegistryDynamicDiscovery(t *testing.T) {
 	}
 }
 
-// TestSkillRankPrecedence 验证同名技能 rank 高者胜（project-omnix(0) 覆盖 bundled(5)）。
+// TestSkillRankPrecedence prefers project-omnix rank 0 over bundled rank 5 for identical names.
 func TestSkillRankPrecedence(t *testing.T) {
 	root := t.TempDir()
 	r := skills.New(root)
@@ -78,14 +74,14 @@ func TestSkillRankPrecedence(t *testing.T) {
 	if !containsStr(s.Content, "project version") {
 		t.Fatalf("内容应取 project 版本, 实际 %q", s.Content)
 	}
-	// Candidate 携带 rank/locator。
+	// Candidates include rank and locator information.
 	cands := r.Candidates()
 	if len(cands) != 1 || cands[0].Rank != 0 {
 		t.Fatalf("候选应 1 个且 rank 0, 实际 %+v", cands)
 	}
 }
 
-// TestSkillToolInjection 验证 skill(name) 工具注入内容 + invocable 策略。
+// TestSkillToolInjection verifies injected content and invocation policy.
 func TestSkillToolInjection(t *testing.T) {
 	root := t.TempDir()
 	r := skills.New(root)
@@ -100,13 +96,13 @@ func TestSkillToolInjection(t *testing.T) {
 	if !containsStr(content, "Refactor tips") {
 		t.Fatalf("应注入正文, 实际 %q", content)
 	}
-	// 不存在 → 错误。
+	// An unknown skill returns an error.
 	if _, err := tool.Resolve("nope", true); err == nil {
 		t.Fatal("不存在技能应报错")
 	}
 }
 
-// TestSkillWatchChange 验证轮询 watch 在目录变化时回调。
+// TestSkillWatchChange invokes the polling callback after directory changes.
 func TestSkillWatchChange(t *testing.T) {
 	root := t.TempDir()
 	r := skills.New(root)
@@ -119,7 +115,7 @@ func TestSkillWatchChange(t *testing.T) {
 		mu.Unlock()
 	})
 
-	// 等首扫完成。
+	// Wait for the initial scan to finish.
 	time.Sleep(60 * time.Millisecond)
 	writeSkill(t, filepath.Join(root, ".omnix", "skills"), "newskill", "body")
 	time.Sleep(120 * time.Millisecond)

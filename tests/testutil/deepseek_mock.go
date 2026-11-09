@@ -1,4 +1,4 @@
-// Package testutil 提供 N07 缓存命中率 E2E 的 Mock DeepSeek 工具。
+// Package testutil provides mock DeepSeek helpers for N07 cache E2E tests.
 package testutil
 
 import (
@@ -8,7 +8,7 @@ import (
 	"sync"
 )
 
-// MockChatRequest 是进入 mock 的请求（我们只关心 prompt 文本）。
+// MockChatRequest carries the prompt fields used by the mock.
 type MockChatRequest struct {
 	Messages []struct {
 		Role    string `json:"role"`
@@ -16,29 +16,28 @@ type MockChatRequest struct {
 	} `json:"messages"`
 }
 
-// PrefixHash 是 prompt 前缀指纹，用于缓存命中判定。
+// PrefixHash fingerprints the prompt prefix for cache matching.
 type PrefixHash struct {
-	// PromptText 拼接后的 prompt 文本。
+	// PromptText contains the assembled prompt.
 	PromptText string
-	// Tokens 估 token 数（chars/4）。
+	// Tokens estimates token count as characters divided by four.
 	Tokens int
 }
 
-// PrefixCacheSimulator 模拟 DeepSeek prefix cache：
-//   - 记录每轮 prompt 文本；
-//   - 命中 = 当前 prompt 与上一轮 prompt 的最长公共前缀占比（字符比）；
-//   - 稳定循环命中率高；切 preset 后首轮低、随后攀升（与官方 KV cache 行为一致）。
+// PrefixCacheSimulator records prompts and estimates hits from their longest common prefix. Stable
+// turns yield high ratios; a preset switch initially misses, then recovers as the new prefix
+// repeats.
 type PrefixCacheSimulator struct {
-	mu        sync.Mutex
+	mu         sync.Mutex
 	lastPrompt string
 }
 
-// NewPrefixCacheSimulator 创建模拟器。
+// NewPrefixCacheSimulator creates a simulator.
 func NewPrefixCacheSimulator() *PrefixCacheSimulator {
 	return &PrefixCacheSimulator{}
 }
 
-// LongestCommonPrefix 返回两个字符串的最长公共前缀长度。
+// LongestCommonPrefix returns the length of the shared prefix of two strings.
 func LongestCommonPrefix(a, b string) int {
 	n := 0
 	for n < len(a) && n < len(b) && a[n] == b[n] {
@@ -47,8 +46,8 @@ func LongestCommonPrefix(a, b string) int {
 	return n
 }
 
-// Simulate 对一次请求计算命中/未命中所占 token。
-// 返回 (hitTokens, missTokens)。命中按与上次 prompt 的公共前缀占比；失配则全 miss。
+// Simulate returns hit and miss token counts based on the shared prefix with the previous prompt;
+// no shared prefix means all misses.
 func (s *PrefixCacheSimulator) Simulate(prompt string) (hit, miss int) {
 	tok := len(prompt) / 4
 	if tok < 1 {
@@ -68,16 +67,16 @@ func (s *PrefixCacheSimulator) Simulate(prompt string) (hit, miss int) {
 	return hit, miss
 }
 
-// NewDeepSeekMock 创建一个 DeepSeek 模拟服务器，返回每次请求解析出的 usage 缓存字段。
-// hitRatio 由 PrefixCacheSimulator 每请求推导。
+// NewDeepSeekMock creates a mock server whose SSE usage cache fields are derived from
+// PrefixCacheSimulator for each request.
 func NewDeepSeekMock() (*httptest.Server, *PrefixCacheSimulator) {
 	sim := NewPrefixCacheSimulator()
 	var mu sync.Mutex
-	var reports []float64 // 命中率历史
+	var reports []float64 // Cache-hit ratio history.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req MockChatRequest
 		_ = json.NewDecoder(r.Body).Decode(&req)
-		// 拼 prompt 文本。
+		// Assemble the prompt text.
 		promptText := ""
 		for _, m := range req.Messages {
 			switch c := m.Content.(type) {
@@ -99,7 +98,7 @@ func NewDeepSeekMock() (*httptest.Server, *PrefixCacheSimulator) {
 		mu.Lock()
 		reports = append(reports, ratio)
 		mu.Unlock()
-		// 返回含 usage 的 SSE。
+		// Return SSE containing usage data.
 		body := `data: {"choices":[],"usage":{"prompt_tokens":` + itoa(hit+miss) +
 			`,"completion_tokens":5,"prompt_cache_hit_tokens":` + itoa(hit) +
 			`,"prompt_cache_miss_tokens":` + itoa(miss) + `}}` + "\n\ndata: [DONE]\n\n"

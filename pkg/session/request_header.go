@@ -1,12 +1,8 @@
-// 本文件对应任务 M19：Request Header 快照 + request/context 路由。
-//
-// 对齐上游：packages/core/session/request-header
-//
-// 设计要点：
-//   - EpochHeader 记录 config/system/tools 三个代际快照；
-//   - RequestContext 记录 provider/model/contextWindow 与 reason(initial/resume/change/series)；
-//   - RebuildFromHeader 从最新 request/header 快照重建 Prompt + Schema 输入面，
-//     保证与实际发送 payload 逐字段一致（不依赖原始 events，compaction 后可重建）。
+// This file implements request-header snapshots and request/context routing
+// (M19), following upstream session/request-header. EpochHeader records config,
+// system, and tool generations; RequestContext records routing and rebuild
+// reason. RebuildFromHeader restores prompt/schema inputs after compaction
+// without relying on original events; fields should match the sent payload.
 package session
 
 import (
@@ -15,10 +11,10 @@ import (
 	"strings"
 )
 
-// Reason 是请求重建原因。
+// Reason identifies why a request is rebuilt.
 type Reason string
 
-// 请求重建原因枚举。
+// Request rebuild reasons.
 const (
 	ReasonInitial Reason = "initial"
 	ReasonResume  Reason = "resume"
@@ -26,41 +22,41 @@ const (
 	ReasonSeries  Reason = "series"
 )
 
-// EpochHeader 是 request/header 快照。
+// EpochHeader is the request/header snapshot.
 type EpochHeader struct {
-	// ConfigEpoch 配置代际（settings 变化递增）。
+	// ConfigEpoch increases when settings change.
 	ConfigEpoch uint64 `json:"configEpoch"`
-	// SystemHash system prompt 的稳定哈希。
+	// SystemHash is the stable system-prompt hash.
 	SystemHash string `json:"systemHash"`
-	// ToolCount 工具数量（工具变化递增代际信号）。
+	// ToolCount records tool count as a tool-generation signal.
 	ToolCount int `json:"toolCount"`
 }
 
-// RequestContext 是 request/context 路由信息。
+// RequestContext records request routing information.
 type RequestContext struct {
-	// Provider 模型提供方。
+	// Provider identifies the model provider.
 	Provider string `json:"provider"`
-	// Model 模型名。
+	// Model names the model.
 	Model string `json:"model"`
-	// ContextWindow 上下文窗口大小。
+	// ContextWindow specifies context capacity.
 	ContextWindow int `json:"contextWindow,omitempty"`
-	// Reason 重建原因。
+	// Reason identifies the rebuild trigger.
 	Reason Reason `json:"reason,omitempty"`
 }
 
-// RequestHeaderSnapshot 是重建请求所需的完整快照。
+// RequestHeaderSnapshot contains the complete request-rebuild inputs.
 type RequestHeaderSnapshot struct {
-	// Header EpochHeader 快照。
+	// Header contains the epoch snapshot.
 	Header EpochHeader `json:"header"`
-	// Context RequestContext 路由信息。
+	// Context contains routing information.
 	Context RequestContext `json:"context"`
-	// SystemPrompt system prompt 文本（重建用）。
+	// SystemPrompt contains text used for rebuilding.
 	SystemPrompt string `json:"systemPrompt,omitempty"`
-	// ToolSchemas 工具 schema JSON（重建用）。
+	// ToolSchemas contains tool-schema JSON used for rebuilding.
 	ToolSchemas json.RawMessage `json:"toolSchemas,omitempty"`
 }
 
-// FoldRequestContext 折叠出最新 request/context（last-write-wins）。
+// FoldRequestContext returns the latest request/context state.
 func FoldRequestContext(events []SessionEvent) (RequestContext, bool) {
 	var ctx RequestContext
 	ok := false
@@ -81,7 +77,7 @@ func FoldRequestContext(events []SessionEvent) (RequestContext, bool) {
 	return ctx, ok
 }
 
-// FoldEpochHeader 折叠出最新 request/header 快照（last-write-wins）。
+// FoldEpochHeader returns the latest request/header snapshot.
 func FoldEpochHeader(events []SessionEvent) (EpochHeader, bool) {
 	var h EpochHeader
 	ok := false
@@ -97,8 +93,8 @@ func FoldEpochHeader(events []SessionEvent) (EpochHeader, bool) {
 	return h, ok
 }
 
-// RebuildFromHeader 从快照重建请求输入面（Prompt + Schema 文本）。
-// 返回的 SystemPrompt 与 ToolSchemas 应与实际发送的 payload 逐字段一致。
+// RebuildFromHeader restores prompt and schema text from the snapshot.
+// Both fields should match the corresponding sent payload fields.
 func RebuildFromHeader(snap *RequestHeaderSnapshot) (systemPrompt string, toolSchemas json.RawMessage, err error) {
 	if snap == nil {
 		return "", nil, nil
@@ -106,8 +102,7 @@ func RebuildFromHeader(snap *RequestHeaderSnapshot) (systemPrompt string, toolSc
 	return snap.SystemPrompt, snap.ToolSchemas, nil
 }
 
-// SnapshotHash 计算快照的稳定哈希（用于判断重建结果是否漂移）。
-// 简化实现：拼接关键字段。
+// SnapshotHash detects snapshot drift by concatenating key fields in this simplified implementation.
 func (s *RequestHeaderSnapshot) SnapshotHash() string {
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("%d", s.Header.ConfigEpoch))

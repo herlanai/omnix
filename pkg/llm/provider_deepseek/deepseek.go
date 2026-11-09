@@ -1,25 +1,11 @@
-// Package provider_deepseek 实现 DeepSeek 官方 API 的 REST + SSE 流式适配器。
-//
-// 对齐上游：packages/llm/providers（deepseek）
-//
-// 说明：
-//   - 通过 POST /chat/completions 且 stream=true 发起流式对话；
-//   - 解析 SSE 行，把 content（正文）/ reasoning_content（推理）/ tool_calls（工具调用）
-//     分别映射为 StreamChunk{text/reasoning/tool-call}；
-//   - 从最终 chunk 解析 usage（含 prompt_cache_hit_tokens / prompt_cache_miss_tokens，
-//     供 N 簇缓存探针使用）；
-//   - API Key 通过 credentials.Store 按请求解析（每请求一次）。
-//
-// H03（LLM HTTP 超时与连接池优化）改进点：
-//  1. 默认使用生产级连接池（MaxIdleConnsPerHost=100，IdleConnTimeout=90s，
-//     TLSHandshakeTimeout=10s，ForceAttemptHTTP2=true），避免每次请求都走 TCP/TLS
-//     握手，吞吐提升 30%+；
-//  2. 所有请求通过 http.NewRequestWithContext + 上游 ctx（H01 runCtx）执行，
-//     连接建立、header 阶段能被父 ctx 的 cancel/timeout 立即取消；
-//  3. SSE 读取阶段（scanner 阻塞 IO）使用「goroutine + channel 桥接」，
-//     ctx 取消时主协程立即返回，保证上层可随时打断长流式读取；
-//  4. 提供 WithTransport / WithMaxIdleConnsPerHost / WithIdleConnTimeout /
-//     WithTLSHandshakeTimeout / DisableHTTP2 等函数式选项，便于调优。
+// Package provider_deepseek implements the DeepSeek REST and SSE adapter,
+// following upstream packages/llm/providers. It posts streaming requests to
+// /chat/completions, maps content/reasoning_content/tool_calls to chunks,
+// parses final usage including cache hit/miss tokens, and resolves credentials
+// once per request. H03 adds connection reuse, context cancellation across
+// dial/TLS/headers/body, a scanner-channel bridge for interruptible SSE reads,
+// and functional transport options. Defaults retain 100 idle connections per
+// host for 90 seconds, allow 10 seconds for TLS, and attempt HTTP/2.
 package provider_deepseek
 
 import (
@@ -42,52 +28,48 @@ import (
 	"github.com/herlanai/omnix/pkg/llm"
 )
 
-// ============================================================================
-// H03 默认连接池常量（企业级主流值）
-// ============================================================================
+// H03 connection-pool defaults.
 
 const (
-	// DefaultMaxIdleConns 全局最大空闲连接数。
+	// DefaultMaxIdleConns limits idle connections across hosts.
 	DefaultMaxIdleConns = 200
-	// DefaultMaxIdleConnsPerHost 每个 host 保留的最大空闲连接数。
-	// DeepSeek API 只有一个 host，此值直接决定并发请求的连接复用率。
+	// DefaultMaxIdleConnsPerHost limits idle connections per host, controlling
+	// connection reuse for concurrent requests to the single DeepSeek host.
 	DefaultMaxIdleConnsPerHost = 100
-	// DefaultIdleConnTimeout 空闲连接保活时间：超过后关闭，避免中间件踢掉
-	// 半开连接导致"首次请求报 EOF"。
+	// DefaultIdleConnTimeout closes idle connections before stale intermediary
+	// connections can cause an EOF on reuse.
 	DefaultIdleConnTimeout = 90 * time.Second
-	// DefaultTLSHandshakeTimeout TLS 握手阶段超时。超过直接报错，不卡住上层。
+	// DefaultTLSHandshakeTimeout bounds TLS handshakes so callers do not block indefinitely.
 	DefaultTLSHandshakeTimeout = 10 * time.Second
-	// DefaultExpectContinueTimeout 客户端等待 100-continue 响应超时。
+	// DefaultExpectContinueTimeout bounds the wait for a 100-continue response.
 	DefaultExpectContinueTimeout = 5 * time.Second
 )
 
-// DefaultBaseURL 是 DeepSeek API 默认基地址。
+// DefaultBaseURL is the default DeepSeek API endpoint.
 const DefaultBaseURL = "https://api.deepseek.com"
 
-// DeepSeek 是 DeepSeek 适配器。
+// DeepSeek implements the DeepSeek adapter.
 type DeepSeek struct {
 	baseURL   string
 	client    *http.Client
-	transport *http.Transport // 记住底层 Transport，便于单元测试观测调优值
+	transport *http.Transport // Keep the transport available for tuning assertions in tests.
 	creds     *credentials.Store
 	apiKeyRef brand.CredentialRef
 }
 
-// NewDeepSeek 创建 DeepSeek 适配器（H03：默认使用生产级连接池）。
-//
-// creds 用于解析 API Key（默认 ref=DEEPSEEK_API_KEY）；apiKeyRef 为空时使用默认。
-// 默认 HTTP 客户端 Timeout=0（不设置"请求总超时"），原因：stream=true 模式下
-// SSE 读取阶段可能持续数十秒甚至数分钟，硬超时会截断合法长响应。
-// 上游应通过 H01 的 SetRunContext(parent, timeout) 传 ctx 预算控制总时长，
-// 更灵活也更安全（取消时资源被正确释放）。
+// NewDeepSeek creates an adapter with pooled connections. Credentials are
+// resolved through creds using apiKeyRef, defaulting to DEEPSEEK_API_KEY.
+// The HTTP client has no overall timeout because valid SSE responses may last
+// minutes. Callers should pass a context budget, for example with SetRunContext,
+// to bound the complete request and release resources on cancellation.
 func NewDeepSeek(creds *credentials.Store, opts ...Option) *DeepSeek {
-	// H03：构造默认 Transport（生产级连接池）。
+	// Build the default pooled transport (H03).
 	tp := newDefaultTransport()
 	d := &DeepSeek{
 		baseURL:   DefaultBaseURL,
 		transport: tp,
 		client: &http.Client{
-			// Timeout=0：交给上游 ctx 控制（含 Dial/TLS/Header/Body-read 全阶段）。
+			// Leave total timeout to the context across dial, TLS, headers, and body reads.
 			Timeout:   0,
 			Transport: tp,
 		},
@@ -100,49 +82,47 @@ func NewDeepSeek(creds *credentials.Store, opts ...Option) *DeepSeek {
 	return d
 }
 
-// newDefaultTransport 构造调优过的 http.Transport（H03 核心）。
+// newDefaultTransport builds the tuned H03 HTTP transport.
 func newDefaultTransport() *http.Transport {
-	// 从 DefaultTransport 开始，只改关心的字段（继承默认的代理/ProxyFromEnvironment）。
+	// Clone DefaultTransport to retain defaults such as ProxyFromEnvironment.
 	def, _ := http.DefaultTransport.(*http.Transport)
 	tp := def.Clone()
-	// 连接池
+	// Configure connection pooling.
 	tp.MaxIdleConns = DefaultMaxIdleConns
 	tp.MaxIdleConnsPerHost = DefaultMaxIdleConnsPerHost
-	tp.MaxConnsPerHost = 0 // 不限制总并发，由上层 Token/并发预算控制
+	tp.MaxConnsPerHost = 0 // Leave total concurrency to higher-level token and concurrency budgets.
 	tp.IdleConnTimeout = DefaultIdleConnTimeout
-	// TCP Dial：控制"建连"阶段时长。
+	// Bound TCP connection establishment.
 	if tp.DialContext == nil {
 		dialer := &net.Dialer{
-			Timeout:   10 * time.Second, // 纯 TCP 建连超时
+			Timeout:   10 * time.Second, // TCP connection timeout.
 			KeepAlive: 30 * time.Second,
 		}
 		tp.DialContext = dialer.DialContext
 	}
-	// TLS 握手超时
+	// TLS handshake timeout.
 	tp.TLSHandshakeTimeout = DefaultTLSHandshakeTimeout
-	// 100-continue 超时
+	// 100-continue timeout.
 	tp.ExpectContinueTimeout = DefaultExpectContinueTimeout
-	// 强制尝试 HTTP/2（DeepSeek API 现代后端一般支持）
+	// Attempt HTTP/2 when supported by the backend.
 	tp.ForceAttemptHTTP2 = true
-	// TLSClientConfig 默认 nil（用系统 CA）；不在这里关 Verify，调用方可通过
-	// WithTransport 注入自定义 Config。
+	// A nil TLSClientConfig uses system CAs and verification. Callers can supply
+	// a custom configuration through WithTransport.
 	return tp
 }
 
-// ============================================================================
-// Option（函数式配置）—— H03 新增多项连接池 / 传输层调优项
-// ============================================================================
+// Functional options, including H03 connection-pool and transport tuning.
 
-// Option 是 DeepSeek 适配器配置项。
+// Option configures a DeepSeek adapter.
 type Option func(*DeepSeek)
 
-// WithBaseURL 覆盖默认 API 地址（测试用 mock server）。
+// WithBaseURL overrides the endpoint, for example with a test server.
 func WithBaseURL(u string) Option {
 	return func(d *DeepSeek) { d.baseURL = u }
 }
 
-// WithHTTPClient 注入自定义 HTTP 客户端（测试/限流用）。
-// 注意：使用该选项后，所有 H03 默认连接池值将被覆盖，使用 c 的 Transport。
+// WithHTTPClient installs a custom client for testing or rate limiting.
+// Its transport replaces all default H03 connection-pool settings.
 func WithHTTPClient(c *http.Client) Option {
 	return func(d *DeepSeek) {
 		d.client = c
@@ -154,7 +134,7 @@ func WithHTTPClient(c *http.Client) Option {
 	}
 }
 
-// WithTransport 直接替换底层 Transport（H03：允许调用方使用自定义连接池）。
+// WithTransport replaces the transport with a caller-managed connection pool.
 func WithTransport(tp *http.Transport) Option {
 	return func(d *DeepSeek) {
 		d.transport = tp
@@ -162,13 +142,13 @@ func WithTransport(tp *http.Transport) Option {
 	}
 }
 
-// WithAPIKeyRef 覆盖 API Key 的 CredentialRef。
+// WithAPIKeyRef overrides the API-key credential reference.
 func WithAPIKeyRef(ref brand.CredentialRef) Option {
 	return func(d *DeepSeek) { d.apiKeyRef = ref }
 }
 
-// WithMaxIdleConnsPerHost 修改默认 Transport 的每 host 最大空闲连接数（H03）。
-// 仅在未通过 WithHTTPClient / WithTransport 注入自定义 client 时生效。
+// WithMaxIdleConnsPerHost tunes the default transport's per-host idle limit.
+// It applies only without a custom client or transport.
 func WithMaxIdleConnsPerHost(n int) Option {
 	return func(d *DeepSeek) {
 		if d.transport != nil {
@@ -177,7 +157,7 @@ func WithMaxIdleConnsPerHost(n int) Option {
 	}
 }
 
-// WithIdleConnTimeout 修改空闲连接超时（H03）。
+// WithIdleConnTimeout sets the idle connection timeout.
 func WithIdleConnTimeout(d time.Duration) Option {
 	return func(tp *DeepSeek) {
 		if tp.transport != nil {
@@ -186,7 +166,7 @@ func WithIdleConnTimeout(d time.Duration) Option {
 	}
 }
 
-// WithTLSHandshakeTimeout 修改 TLS 握手超时（H03）。
+// WithTLSHandshakeTimeout sets the TLS handshake timeout.
 func WithTLSHandshakeTimeout(t time.Duration) Option {
 	return func(d *DeepSeek) {
 		if d.transport != nil {
@@ -195,38 +175,33 @@ func WithTLSHandshakeTimeout(t time.Duration) Option {
 	}
 }
 
-// DisableHTTP2 关闭 HTTP/2 尝试（H03：仅在特殊场景下调用方主动降级到 HTTP/1.1）。
+// DisableHTTP2 disables HTTP/2 attempts for callers requiring HTTP/1.1.
 func DisableHTTP2() Option {
 	return func(d *DeepSeek) {
 		if d.transport != nil {
 			d.transport.ForceAttemptHTTP2 = false
-			// HTTP/2 关闭的标准姿势二选一：
-			// 1) 设 TLSNextProto 为非 nil 空 map，强制不协商 ALPN h2
-			// 2) 或者通过 GODEBUG 环境变量；Go 官方推荐 (1)。
+			// A non-nil empty TLSNextProto map disables HTTP/2 negotiation explicitly,
+			// without relying on the process-wide GODEBUG environment variable.
 			d.transport.TLSNextProto = map[string]func(string, *tls.Conn) http.RoundTripper{}
 		}
 	}
 }
 
-// ============================================================================
-// 观测器（单元测试 / 运维诊断用）
-// ============================================================================
+// Transport accessors for tests and operational diagnostics.
 
-// Transport 返回当前使用的 *http.Transport（若 client.Transport 不是默认
-// Transport 类型则返回 nil）。供测试断言调优值。
+// Transport returns the active http.Transport, or nil for another transport
+// type. Tests can inspect its tuning values.
 func (d *DeepSeek) Transport() *http.Transport { return d.transport }
 
-// HTTPClient 返回当前使用的 *http.Client。供测试替换 / 观测。
+// HTTPClient returns the active client for inspection or testing.
 func (d *DeepSeek) HTTPClient() *http.Client { return d.client }
 
-// Name 实现 llm.LLMAdapter。
+// Name implements llm.LLMAdapter.
 func (d *DeepSeek) Name() string {
 	return "deepseek"
 }
 
-// ============================================================================
-// 请求/响应结构（仅覆盖本项目所需字段）
-// ============================================================================
+// Request and response structures include only fields used by this adapter.
 
 type chatRequest struct {
 	ReasoningEffort string         `json:"reasoning_effort,omitempty"`
@@ -239,9 +214,8 @@ type chatRequest struct {
 	StreamOptions   *streamOptions `json:"stream_options,omitempty"`
 }
 
-// streamOptions 对应官方 stream_options 对象（OpenAI 兼容格式）。
-// 注意：必须是对象 `{"include_usage": true}`，不能传布尔值，否则 DeepSeek
-// 会返回 400 "stream_options: invalid type: boolean `true`, expected struct StreamOptions"。
+// streamOptions uses the OpenAI-compatible object form {"include_usage": true}.
+// A boolean value is invalid and causes a DeepSeek 400 response.
 type streamOptions struct {
 	IncludeUsage bool `json:"include_usage"`
 }
@@ -277,7 +251,7 @@ type chatToolCallFunction struct {
 	Arguments string `json:"arguments"`
 }
 
-// sseChunk 是 SSE 中单条 data 的 JSON 结构。
+// sseChunk represents one SSE data payload.
 type sseChunk struct {
 	Choices []struct {
 		Delta struct {
@@ -294,20 +268,15 @@ type sseChunk struct {
 	} `json:"usage"`
 }
 
-// ============================================================================
-// Chat 主流程（H03：ctx 贯穿 Dial/TLS/Header/Body-read 全阶段）
-// ============================================================================
+// Chat carries context cancellation through dial, TLS, headers, and body reads.
 
-// Chat 实现 llm.LLMAdapter：发起 SSE 流式请求并解析分片。
-//
-// 上游应通过 ctx 携带超时/取消预算（H01 runCtx）。
-// ctx 取消在以下三阶段均生效：
-//   - 连接建立（Dial/TLS）：http.Request.WithContext(ctx) 自动生效；
-//   - 响应头接收：client.Do 内部使用 ctx.Done() 打断；
-//   - SSE body 读取：readSSE 内部采用 goroutine+channel 桥接，
-//     即使 scanner 阻塞在 Read()，主协程也能立即退出并返回 ctx.Err()。
+// Chat implements llm.LLMAdapter by parsing an SSE response into chunks.
+// Callers supply cancellation and timeout budgets through ctx. The request
+// context cancels connection establishment and header reads; readSSE uses a
+// scanner-channel bridge so the caller can return when canceled even while
+// the scanner is blocked in Read.
 func (d *DeepSeek) Chat(ctx context.Context, req llm.ChatRequest, cb func(llm.StreamChunk)) (llm.Usage, error) {
-	// 每请求解析一次 API Key（M39 语义）
+	// Resolve the API key once per request (M39).
 	apiKey, ok := d.creds.Resolve(ctx, d.apiKeyRef)
 	if !ok || apiKey == "" {
 		return llm.Usage{}, &llm.LlmFailure{Kind: llm.FailResponseRefusal, Message: "missing API key credential"}
@@ -319,9 +288,9 @@ func (d *DeepSeek) Chat(ctx context.Context, req llm.ChatRequest, cb func(llm.St
 		return llm.Usage{}, fmt.Errorf("deepseek: marshal request: %w", err)
 	}
 
-	// H03：Request 绑定 ctx——从 Dial 到 Header 全链路可取消。
-	// 注意：body 是 bytes.Reader 可多次 ReadSeek，重试层使用时无需改这里
-	// （重试逻辑走 llm/retry.go 的 wrapper，不在 provider 内部处理）。
+	// Bind ctx to the request for cancellation from dial through headers.
+	// The bytes.Reader body is replayable; retries are handled by llm/retry.go
+	// rather than inside the provider.
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, d.baseURL+"/chat/completions", bytes.NewReader(body))
 	if err != nil {
 		return llm.Usage{}, fmt.Errorf("deepseek: new request: %w", err)
@@ -332,7 +301,7 @@ func (d *DeepSeek) Chat(ctx context.Context, req llm.ChatRequest, cb func(llm.St
 
 	resp, err := d.client.Do(httpReq)
 	if err != nil {
-		// H03：映射到稳定错误分类；ctx 取消 / 超时单独归类。
+		// Map failures to stable categories, preserving cancellation and deadline causes.
 		if ctx.Err() != nil {
 			return llm.Usage{}, &llm.LlmFailure{Kind: llm.FailOverload, Message: ctx.Err().Error(), Cause: ctx.Err()}
 		}
@@ -341,8 +310,8 @@ func (d *DeepSeek) Chat(ctx context.Context, req llm.ChatRequest, cb func(llm.St
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		// 优先读取响应 body，用官方对齐的分类器做精确归类（R04 语义）；
-		// 读失败或无法识别时回退到状态码兜底分类。
+		// Classify provider details from the body first (R04), falling back to HTTP
+		// status when the body cannot be read or recognized.
 		body, rerr := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
 		if rerr == nil && len(body) > 0 {
 			return llm.Usage{}, d.mapHTTPErrorBody(resp.StatusCode, string(body))
@@ -350,11 +319,11 @@ func (d *DeepSeek) Chat(ctx context.Context, req llm.ChatRequest, cb func(llm.St
 		return llm.Usage{}, d.mapHTTPError(resp.StatusCode)
 	}
 
-	// H03：SSE 读阶段带 ctx。
+	// Pass ctx through SSE reading.
 	return d.readSSE(ctx, resp.Body, cb)
 }
 
-// buildPayload 将 ChatRequest 转为 DeepSeek API payload。
+// buildPayload converts ChatRequest to a DeepSeek API payload.
 func (d *DeepSeek) buildPayload(req llm.ChatRequest) chatRequest {
 	messages := make([]chatMessage, 0, len(req.Messages)+1)
 	if req.System != "" {
@@ -413,30 +382,24 @@ func (d *DeepSeek) buildPayload(req llm.ChatRequest) chatRequest {
 	}
 }
 
-// ============================================================================
-// SSE 读取（H03：ctx 可打断阻塞 IO）
-// ============================================================================
+// SSE reading supports cancellation of blocking I/O (H03).
 
-// sseScanResult 是 scanner goroutine 传递给主协程的"扫描事件"。
-//   - scanOK=true：新一行扫描完成，line 有效
-//   - scanOK=false, err!=nil：scanner.Scan 返回 false 且 Err != nil
-//   - scanOK=false, err==nil：扫描正常结束（EOF / [DONE] 提前 break）
+// sseScanResult carries a line or a terminal scanner result to the consumer.
+// A terminal result sets done and includes the scanner error, if any.
 type sseScanResult struct {
 	line string
 	err  error
-	done bool // true 代表 scanner goroutine 已退出（正常或异常）
+	done bool // True when the scanner goroutine has exited, normally or with an error.
 }
 
-// readSSE 逐行读取 SSE 并回调分片，最后返回 usage。
-//
-// H03 改进：ctx 取消 / 超时时，即使 scanner 正阻塞在底层 Read（例如网络僵死），
-// 主协程也能立即返回 ctx.Err()，不会卡死调用方。
+// readSSE reads lines, emits chunks, and returns usage. Cancellation lets the
+// caller return promptly even when the scanner is blocked in a network read.
 func (d *DeepSeek) readSSE(ctx context.Context, r io.Reader, cb func(llm.StreamChunk)) (llm.Usage, error) {
 	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
 
-	// 启动一个专门 goroutine 跑阻塞 scanner，把每行 + 结束信号送到 ch。
-	// 缓冲 16：让 scanner 比消费侧稍微超前一点点，减少 ctx 取消时的等待概率。
+	// Run the blocking scanner separately and deliver lines and completion through
+	// the channel. A buffer of 16 lets scanning run slightly ahead of consumption.
 	ch := make(chan sseScanResult, 16)
 	stop := make(chan struct{})
 	defer close(stop)
@@ -496,9 +459,8 @@ func (d *DeepSeek) readSSE(ctx context.Context, r io.Reader, cb func(llm.StreamC
 	for {
 		select {
 		case <-ctx.Done():
-			// H03：ctx 先触发 → 立即返回稳定错误。
-			// scanner goroutine 稍后会随 resp.Body.Close()（Chat 里 defer 触发）
-			// 被打断 Read 并退出 channel 关闭。不泄漏。
+			// Return the classified cancellation error promptly. Chat's deferred Body.Close
+			// interrupts the scanner's pending Read so its goroutine can exit.
 			return usage, &llm.LlmFailure{
 				Kind:    llm.FailOverload,
 				Message: "deepseek: sse read interrupted: " + ctx.Err().Error(),
@@ -506,7 +468,7 @@ func (d *DeepSeek) readSSE(ctx context.Context, r io.Reader, cb func(llm.StreamC
 			}
 		case res, ok := <-ch:
 			if !ok {
-				// channel 提前关（不应该发生，上面保证有 done 信号后才 close）。
+				// The scanner may close without a done result after [DONE] or cancellation.
 				return usage, finish()
 			}
 			if res.done {
@@ -515,7 +477,7 @@ func (d *DeepSeek) readSSE(ctx context.Context, r io.Reader, cb func(llm.StreamC
 				}
 				return usage, finish()
 			}
-			// 处理一行（逻辑与旧实现一致）
+			// Process one SSE line.
 			line := strings.TrimSpace(res.line)
 			if line == "" {
 				continue
@@ -532,7 +494,7 @@ func (d *DeepSeek) readSSE(ctx context.Context, r io.Reader, cb func(llm.StreamC
 			if err := json.Unmarshal([]byte(data), &chunk); err != nil {
 				return usage, fmt.Errorf("deepseek: malformed SSE data: %w", err)
 			}
-			// usage 解析
+			// Parse usage.
 			if chunk.Usage != nil {
 				usage = llm.Usage{
 					PromptTokens:          chunk.Usage.PromptTokens,
@@ -571,13 +533,11 @@ func (d *DeepSeek) readSSE(ctx context.Context, r io.Reader, cb func(llm.StreamC
 	}
 }
 
-// ============================================================================
-// 错误映射
-// ============================================================================
+// Error mapping.
 
-// mapHTTPError 将 HTTP 状态码映射为稳定的 LlmFailure 分类。
-// R04：401/403 → invalid-credential（官方 INVALID_CREDENTIAL）；其余对齐 rate-limit/overload。
-// 若能从响应 body 拿到 provider detail，可用 llm.NewProviderFailure(detail) 做更精确分类。
+// mapHTTPError maps status codes to stable LlmFailure categories.
+// 401/403 map to invalid-credential (R04); other cases include rate-limit
+// and overload. Provider body details allow more precise classification.
 func (d *DeepSeek) mapHTTPError(status int) *llm.LlmFailure {
 	switch {
 	case status == 429:
@@ -593,11 +553,10 @@ func (d *DeepSeek) mapHTTPError(status int) *llm.LlmFailure {
 	}
 }
 
-// mapHTTPErrorBody 结合状态码与响应 body 做精确错误分类（R04 语义对齐）。
-//   - 先用官方分类器 llm.NewProviderFailure(body) 从 provider detail 判别稳定分类；
-//   - 若识别为 unknown（空串）则回退到状态码兜底分类 mapHTTPError；
-//   - Message 始终携带原始 body（截断到 ~200 字符）便于上层与用户诊断真实原因，
-//     避免「仅按状态码猜」导致的误归类（例如短消息被 400 误判为 context-overflow）。
+// mapHTTPErrorBody first classifies provider details, then falls back to status
+// when unrecognized. Message retains the body, truncated to about 200
+// characters, for diagnosis and to avoid misleading status-only guesses
+// such as treating every 400 response as context overflow.
 func (d *DeepSeek) mapHTTPErrorBody(status int, body string) *llm.LlmFailure {
 	const maxBody = 200
 	snippet := body
@@ -605,16 +564,15 @@ func (d *DeepSeek) mapHTTPErrorBody(status int, body string) *llm.LlmFailure {
 		snippet = snippet[:maxBody] + "..."
 	}
 	if f := llm.NewProviderFailure(body); f.Kind != "unknown" && f.Kind != "" {
-		// 用 API 返回的 detail 精确归类，并带上原始正文便于排障。
+		// Classify API details and preserve the body for troubleshooting.
 		f.Message = fmt.Sprintf("http %d: %s", status, snippet)
 		return f
 	}
-	// 无法从 body 识别 → 回退状态码分类，但 Message 附上原文。
+	// Fall back to status classification while retaining the original body.
 	f := d.mapHTTPError(status)
 	f.Message = fmt.Sprintf("%s (body: %s)", f.Message, snippet)
 	return f
 }
 
-// 避免 errors 包未使用告警（上面 Cause: ctx.Err() 已用 context 包里的接口；
-// errors 保留给未来需要 errors.Is 的场景；当前通过显式变量使用消告警）。
+// Retain an explicit errors reference for future errors.Is usage.
 var _ = errors.New

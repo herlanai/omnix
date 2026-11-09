@@ -1,8 +1,5 @@
-// Package tests 的 Message Feedback（S09）验收测试。
-//
-// 覆盖：
-//   - write/read feedback（rating/note/CAS version/时间戳）
-//   - CAS 冲突返回 VERSION_CONFLICT；不存在消息 NOT_FOUND；无会话 SESSION_NOT_FOUND
+// S09 feedback tests cover rating/note/version/timestamps, VERSION_CONFLICT on CAS mismatch,
+// NOT_FOUND for missing messages, and SESSION_NOT_FOUND for missing sessions.
 package tests
 
 import (
@@ -14,7 +11,7 @@ import (
 	"github.com/herlanai/omnix/pkg/storage"
 )
 
-// TestFeedbackWriteRead 验证写入与读取（CAS 版本自增）。
+// TestFeedbackWriteRead verifies reading and writing with incrementing CAS versions.
 func TestFeedbackWriteRead(t *testing.T) {
 	ctx := context.Background()
 	store := feedback.New(storage.NewMemoryKV())
@@ -37,14 +34,14 @@ func TestFeedbackWriteRead(t *testing.T) {
 	if fb.Version != 1 {
 		t.Fatalf("version 应 1, 实际 %d", fb.Version)
 	}
-	// 更新（无 CAS 约束）→ 版本升到 2。
+	// An unconstrained update advances the version to two.
 	v2, _ := store.Put(ctx, sid, "msg1", feedback.RatingThumbsDown, "revised", nil)
 	if v2 != 2 {
 		t.Fatalf("更新后版本应 2, 实际 %d", v2)
 	}
 }
 
-// TestFeedbackCASConflict 验证版本冲突 → VERSION_CONFLICT。
+// TestFeedbackCASConflict returns VERSION_CONFLICT on a version mismatch.
 func TestFeedbackCASConflict(t *testing.T) {
 	ctx := context.Background()
 	store := feedback.New(storage.NewMemoryKV())
@@ -52,7 +49,7 @@ func TestFeedbackCASConflict(t *testing.T) {
 	if _, err := store.Put(ctx, sid, "m", feedback.RatingThumbsUp, "", nil); err != nil {
 		t.Fatal(err)
 	}
-	// 用错误 expectedVersion（0=创建）去覆盖已存在记录 → 冲突。
+	// expectedVersion=0 means creation and cannot overwrite an existing record.
 	exp := uint64(0)
 	_, err := store.Put(ctx, sid, "m", feedback.RatingThumbsDown, "", &exp)
 	if feedback.CodeOf(err) != feedback.CodeVersionConflict {
@@ -60,7 +57,7 @@ func TestFeedbackCASConflict(t *testing.T) {
 	}
 }
 
-// TestFeedbackNotFound 验证不存在消息 → NOT_FOUND。
+// TestFeedbackNotFound returns NOT_FOUND for an absent message.
 func TestFeedbackNotFound(t *testing.T) {
 	ctx := context.Background()
 	store := feedback.New(storage.NewMemoryKV())
@@ -70,7 +67,7 @@ func TestFeedbackNotFound(t *testing.T) {
 	}
 }
 
-// TestFeedbackSessionNotFound 验证无会话 → SESSION_NOT_FOUND。
+// TestFeedbackSessionNotFound returns SESSION_NOT_FOUND for an absent session.
 func TestFeedbackSessionNotFound(t *testing.T) {
 	ctx := context.Background()
 	store := feedback.New(storage.NewMemoryKV())
@@ -80,7 +77,7 @@ func TestFeedbackSessionNotFound(t *testing.T) {
 	}
 }
 
-// TestFeedbackListAndDelete 验证列与会话删除。
+// TestFeedbackListAndDelete verifies listing and session deletion.
 func TestFeedbackListAndDelete(t *testing.T) {
 	ctx := context.Background()
 	sid := brand.NewSessionID("sX")

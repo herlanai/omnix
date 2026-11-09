@@ -1,10 +1,8 @@
-// Package shell 提供 Shell/Bash 接缝与 tool-bash。
-//
-// 对齐上游：packages/shell/shell + bash-local + bash-sandbox + tool-bash（M37）
-//
-// 本文件实现：ShellExecRequest→Resolve→ShellExecSpec + RunResult（5 个正交字段：
-// exitCode / signal / timedOut / aborted / timeoutMs）+ 前台运行（基于 pkg/subprocess，
-// 64KB 截断 + spill 拿完整流）+ 后台 Job（基于 pkg/jobs）。
+// Package shell implements shell execution and tool-bash, matching shell/shell,
+// bash-local, bash-sandbox, and tool-bash (M37). Requests resolve to explicit specs.
+// Results keep exitCode, signal, timedOut, aborted, and timeoutMs independent.
+// Foreground execution uses subprocess with a 64 KB inline limit and complete
+// spill streams; background execution uses jobs.
 package shell
 
 import (
@@ -17,73 +15,69 @@ import (
 	"github.com/herlanai/omnix/pkg/subprocess"
 )
 
-// ============================================================================
-// 请求 / 规格 / 结果
-// ============================================================================
+// Requests, specifications, and results.
 
-// ExecRequest 是一次 shell 执行请求。
+// ExecRequest describes a shell execution request.
 type ExecRequest struct {
-	// Command 待执行的命令字符串。
+	// Command is the command text to execute.
 	Command string
-	// Cwd 工作目录（空则继承）。
+	// Cwd is the working directory; empty inherits it.
 	Cwd string
-	// TimeoutMs 超时毫秒；<=0 表示不超时。
+	// TimeoutMs is the timeout in milliseconds; nonpositive disables it.
 	TimeoutMs int
-	// Env 附加环境。
+	// Env adds environment variables.
 	Env map[string]string
-	// Background 是否后台 Job（由调用方通过 ShellTool 决定，非本结构）。
+	// Background execution is selected by the caller through ShellTool.
 }
 
-// ExecSpec 是 resolve 后的完整执行规格。
+// ExecSpec is the fully resolved execution specification.
 type ExecSpec struct {
-	// Argv shell 包装后的 argv（bash -c / cmd /c / powershell）。
+	// Argv wraps the command in bash -c, cmd /c, or PowerShell.
 	Argv []string
-	// Cwd 工作目录。
+	// Cwd is the working directory.
 	Cwd string
-	// TimeoutMs 超时。
+	// TimeoutMs is the timeout.
 	TimeoutMs int
-	// Env 附加环境。
+	// Env adds environment variables.
 	Env map[string]string
-	// SandboxMode 生效沙箱模式（read-only/workspace-write/danger）。
+	// SandboxMode is the effective read-only, workspace-write, or danger mode.
 	SandboxMode string
 }
 
-// RunResult 是一次运行的结果（5 个正交字段）。
+// RunResult records five independent execution outcome fields.
 type RunResult struct {
-	// ExitCode 退出码；被信号杀死或异常时可能为 -1。
+	// ExitCode may be -1 for signal termination or abnormal exit.
 	ExitCode int    `json:"exitCode"`
 	Signal   string `json:"signal,omitempty"`
-	// TimedOut 是否因超时被强杀。
+	// TimedOut indicates forced termination due to timeout.
 	TimedOut bool `json:"timedOut"`
-	// Aborted 是否因取消被终止。
+	// Aborted indicates termination due to cancellation.
 	Aborted bool `json:"aborted"`
-	// TimeoutMs 本次运行的超时毫秒（0 表示未设超时）。
+	// TimeoutMs is the configured timeout in milliseconds; zero means unset.
 	TimeoutMs int `json:"timeoutMs"`
 }
 
-// BashResult 是 tool-bash 的模型向结果。
+// BashResult is the model-facing tool-bash result.
 type BashResult struct {
-	// Output 内联输出（可能截断为 TAIL）。
+	// Output is inline output, potentially truncated to its tail.
 	Output string `json:"output"`
-	// Truncated 是否截断。
+	// Truncated indicates output truncation.
 	Truncated bool `json:"truncated"`
-	// SpillPath 完整流 spill 路径（截断时提供）。
+	// SpillPath points to the complete stream when truncated.
 	SpillPath string `json:"spillPath,omitempty"`
-	// Result 运行事实。
+	// Result records execution facts.
 	Result RunResult `json:"result"`
 }
 
-// ============================================================================
-// Shell 解析与运行
-// ============================================================================
+// Shell resolution and execution.
 
-// Shell 是 shell 执行器。
+// Shell executes shell commands.
 type Shell struct {
-	rt    *subprocess.LocalRuntime
-	sandbox string // 生效沙箱模式
+	rt      *subprocess.LocalRuntime
+	sandbox string // Effective sandbox mode.
 }
 
-// New 创建 shell 执行器（sandbox 传 read-only/workspace-write/danger；空默认 workspace-write）。
+// New creates a shell with read-only, workspace-write, or danger mode; empty defaults to workspace-write.
 func New(sandboxMode string) *Shell {
 	mode := sandboxMode
 	if mode == "" {
@@ -92,7 +86,7 @@ func New(sandboxMode string) *Shell {
 	return &Shell{rt: subprocess.NewLocal(), sandbox: mode}
 }
 
-// Resolve 把命令解析为执行规格。
+// Resolve converts a command into an execution specification.
 func (s *Shell) Resolve(req ExecRequest) ExecSpec {
 	argv := shellArgv(req.Command)
 	timeout := req.TimeoutMs
@@ -108,7 +102,7 @@ func (s *Shell) Resolve(req ExecRequest) ExecSpec {
 	}
 }
 
-// shellArgv 按平台包装命令为 argv（绝不作嵌套 shell 解释）。
+// shellArgv wraps commands for the platform without nested shell interpretation.
 func shellArgv(cmd string) []string {
 	switch runtime.GOOS {
 	case "windows":
@@ -118,7 +112,7 @@ func shellArgv(cmd string) []string {
 	}
 }
 
-// Run 前台执行并等待结果，返回结果 + 收集输出。
+// Run waits for foreground execution and returns outcome and collected output.
 func (s *Shell) Run(req ExecRequest) (RunResult, BashResult, error) {
 	spec := s.Resolve(req)
 	spillRoot := tmpDir()
@@ -133,7 +127,7 @@ func (s *Shell) Run(req ExecRequest) (RunResult, BashResult, error) {
 		Env:            spec.Env,
 	})
 
-	// 是否超时：监听 done vs timeout。
+	// Wait for completion or timeout.
 	var res RunResult
 	res.TimeoutMs = spec.TimeoutMs
 	timedCh := make(chan struct{})
@@ -147,7 +141,7 @@ func (s *Shell) Run(req ExecRequest) (RunResult, BashResult, error) {
 		res.ExitCode = outcome.ExitCode
 		res.Signal = outcome.Signal
 	case <-timedCh:
-		// 超时：树终止，标记 timedOut。
+		// On timeout, terminate the process tree and mark TimedOut.
 		h.Terminate()
 		res.TimedOut = true
 		res.ExitCode = -1
@@ -172,21 +166,19 @@ func tmpDir() string {
 	return dir
 }
 
-// ============================================================================
-// tool-bash：模型向入口
-// ============================================================================
+// Model-facing tool-bash entry point.
 
-// BashTool 是工具实现（复用 Shell）。
+// BashTool implements the tool using Shell.
 type BashTool struct {
 	shell *Shell
 }
 
-// NewBashTool 创建 bash 工具。
+// NewBashTool creates a Bash tool.
 func NewBashTool(sandboxMode string) *BashTool {
 	return &BashTool{shell: New(sandboxMode)}
 }
 
-// Exec 执行命令并返回模型向结果。
+// Exec executes a command and returns a model-facing result.
 func (b *BashTool) Exec(req ExecRequest) (*BashResult, error) {
 	_, br, err := b.shell.Run(req)
 	if err != nil {
@@ -195,7 +187,7 @@ func (b *BashTool) Exec(req ExecRequest) (*BashResult, error) {
 	return &br, nil
 }
 
-// FormatOutput 生成模型向文本（截断时引导读 spill）。
+// FormatOutput formats model-facing text with spill-reading guidance when truncated.
 func FormatOutput(r *BashResult) string {
 	if !r.Truncated {
 		return r.Output

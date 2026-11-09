@@ -1,15 +1,8 @@
-// Package sessionquery 提供会话查询与搜索（任务 S04：Session Query + FTS5 搜索）。
-//
-// 对齐上游：packages/storage/session-query
-//
-// 设计要点：
-//   - 读层构建在 S03 的 SQLite 会话存储之上：枚举会话（ListSessions）、按会话读事件
-//     （Load），并复用其 FTS5 全文检索（Search）；标题取 latest-wins 投影，缺省回退
-//     首条用户消息前缀；
-//   - ListSummaries 支持三元过滤：标题前缀（TitlePrefix）/ 创建时间范围
-//     （CreatedFrom..CreatedTo）/ 数量上限（Limit），过滤结果按更新时间倒序；
-//   - Search 先用 FTS5 在事件正文/标题里命中关键词，得到出现该词的会话集合，
-//     再附加「标题含词」的会话；两者求并集后返回摘要（ctrl+f 定位语义）。
+// Package sessionquery queries sessions and FTS5 search (S04), matching storage/session-query.
+// It reads the S03 SQLite store through ListSessions, Load, and Search. Titles use
+// the latest title event or the first user-message prefix. ListSummaries filters
+// by title prefix, creation-time range, and limit, ordered by most recent update.
+// Search unions FTS5 body/title hits with title-substring matches and returns summaries.
 package sessionquery
 
 import (
@@ -23,48 +16,44 @@ import (
 	"github.com/herlanai/omnix/pkg/sessiontitle"
 )
 
-// ============================================================================
-// 类型
-// ============================================================================
+// Types.
 
-// SessionSummary 是一条会话的可查询摘要。
+// SessionSummary is a queryable session summary.
 type SessionSummary struct {
-	ID          string    `json:"id"`
-	Title       string    `json:"title"`
-	CreatedAt   time.Time `json:"createdAt"`
-	UpdatedAt   time.Time `json:"updatedAt"`
-	EventCount  int       `json:"eventCount"`
+	ID         string    `json:"id"`
+	Title      string    `json:"title"`
+	CreatedAt  time.Time `json:"createdAt"`
+	UpdatedAt  time.Time `json:"updatedAt"`
+	EventCount int       `json:"eventCount"`
 }
 
-// ListRequest 是会话列表查询参数（三元过滤）。
+// ListRequest configures the three session-list filters.
 type ListRequest struct {
-	TitlePrefix string     // 标题前缀过滤（可选）
-	CreatedFrom *time.Time // 创建时间下界（可选，含）
-	CreatedTo   *time.Time // 创建时间上界（可选，含）
-	Limit       int        // 返回上限（<=0 表示不限）
+	TitlePrefix string     // Optional title-prefix filter.
+	CreatedFrom *time.Time // Optional inclusive lower creation-time bound.
+	CreatedTo   *time.Time // Optional inclusive upper creation-time bound.
+	Limit       int        // Maximum results; nonpositive means unlimited.
 }
 
-// SearchRequest 是全文搜索参数。
+// SearchRequest configures full-text search.
 type SearchRequest struct {
-	Keyword string // 关键词（非空）
-	Limit   int    // 返回上限
+	Keyword string // Nonempty search keyword.
+	Limit   int    // Maximum results.
 }
 
-// QueryService 提供按标题/时间/关键词检索会话的能力。
+// QueryService finds sessions by title, time, or keyword.
 type QueryService struct {
 	store *sqlstore.Store
 }
 
-// New 创建会话查询服务，绑定 S03 SQLite 会话存储。
+// New binds a query service to the S03 SQLite session store.
 func New(store *sqlstore.Store) *QueryService {
 	return &QueryService{store: store}
 }
 
-// ============================================================================
-// 会话摘要派生
-// ============================================================================
+// Session summary derivation.
 
-// deriveSummary 从某会话的全部事件派生摘要（标题/创建/更新/数量）。
+// deriveSummary derives title, timestamps, and counts from all session events.
 func deriveSummary(id string, events []session.SessionEvent) SessionSummary {
 	sum := SessionSummary{ID: id, EventCount: len(events)}
 	if len(events) == 0 {
@@ -73,7 +62,7 @@ func deriveSummary(id string, events []session.SessionEvent) SessionSummary {
 	sum.CreatedAt = events[0].Time
 	sum.UpdatedAt = events[len(events)-1].Time
 
-	// 标题 latest-wins；空则回退首条用户消息前缀。
+	// Use the latest title, falling back to the first user-message prefix.
 	title := session.FoldSessionTitle(events).Title
 	if title == "" {
 		title = firstUserMessage(events)
@@ -82,7 +71,7 @@ func deriveSummary(id string, events []session.SessionEvent) SessionSummary {
 	return sum
 }
 
-// firstUserMessage 取首条用户消息内容（用于标题回退）。
+// firstUserMessage returns the first user message for title fallback.
 func firstUserMessage(events []session.SessionEvent) string {
 	for _, ev := range events {
 		if ev.Type == session.EventUserMessage {
@@ -94,11 +83,9 @@ func firstUserMessage(events []session.SessionEvent) string {
 	return ""
 }
 
-// ============================================================================
-// 列表（三元过滤）
-// ============================================================================
+// Listing with three filters.
 
-// ListSummaries 按标题前缀 + 创建时间范围枚举会话，返回按更新时间倒序的摘要。
+// ListSummaries filters by title prefix and creation range, ordered by latest update first.
 func (q *QueryService) ListSummaries(ctx context.Context, req ListRequest) ([]SessionSummary, error) {
 	ids, err := q.store.ListSessions(ctx)
 	if err != nil {
@@ -111,11 +98,11 @@ func (q *QueryService) ListSummaries(ctx context.Context, req ListRequest) ([]Se
 			return nil, err
 		}
 		sum := deriveSummary(id, events)
-		// 标题前缀过滤。
+		// Filter by title prefix.
 		if req.TitlePrefix != "" && !strings.HasPrefix(sum.Title, req.TitlePrefix) {
 			continue
 		}
-		// 创建时间范围过滤。
+		// Filter by creation-time range.
 		if req.CreatedFrom != nil && sum.CreatedAt.Before(*req.CreatedFrom) {
 			continue
 		}
@@ -124,7 +111,7 @@ func (q *QueryService) ListSummaries(ctx context.Context, req ListRequest) ([]Se
 		}
 		out = append(out, sum)
 	}
-	// 按更新时间倒序（最新在前）。
+	// Sort updates newest first.
 	sortByUpdatedDesc(out)
 	if req.Limit > 0 && len(out) > req.Limit {
 		out = out[:req.Limit]
@@ -132,18 +119,16 @@ func (q *QueryService) ListSummaries(ctx context.Context, req ListRequest) ([]Se
 	return out, nil
 }
 
-// ============================================================================
-// 搜索（FTS5）
-// ============================================================================
+// FTS5 search.
 
-// Search 用 FTS5 检索关键词，返回命中会话的摘要（内容命中 ∪ 标题含词）。
+// Search returns summaries for the union of FTS5 content hits and title-substring matches.
 func (q *QueryService) Search(ctx context.Context, req SearchRequest) ([]SessionSummary, error) {
 	keyword := strings.TrimSpace(req.Keyword)
 	if keyword == "" {
 		return nil, nil
 	}
 
-	// 1) 事件正文/标题 FTS 命中 → 收集会话 id 集合。
+	// Collect session IDs from FTS body/title matches.
 	matches, err := q.store.Search(ctx, keyword)
 	if err != nil {
 		return nil, err
@@ -153,7 +138,7 @@ func (q *QueryService) Search(ctx context.Context, req SearchRequest) ([]Session
 		hitSessions[m.SessionID] = true
 	}
 
-	// 2) 标题包含关键词的会话也纳入（即使 FTS 在别处未命中该词）。
+	// Include sessions whose titles contain the keyword even without other FTS hits.
 	ids, err := q.store.ListSessions(ctx)
 	if err != nil {
 		return nil, err
@@ -176,13 +161,11 @@ func (q *QueryService) Search(ctx context.Context, req SearchRequest) ([]Session
 	return out, nil
 }
 
-// ============================================================================
-// 工具
-// ============================================================================
+// Helpers.
 
-// sortByUpdatedDesc 按 UpdatedAt 倒序排序（最新在前）。
+// sortByUpdatedDesc orders summaries by most recent update first.
 func sortByUpdatedDesc(list []SessionSummary) {
-	// 简单插入排序（列表规模通常很小）。
+	// Insertion sort for typically small result lists.
 	for i := 1; i < len(list); i++ {
 		j := i
 		for j > 0 && list[j].UpdatedAt.After(list[j-1].UpdatedAt) {

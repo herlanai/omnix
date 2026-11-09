@@ -1138,16 +1138,16 @@
 ### 11.3 测试运行命令
 
 ```bash
-# 运行全部单元测试
+# Run all unit tests.
 go test ./... -count=1
 
-# 运行缓存命中率 E2E 验收套件
+# Run cache-hit end-to-end acceptance tests.
 go test ./tests/ -run TestE2E -v -count=1
 
-# 运行竞态检测（H 簇并发用例依赖）
+# Run the race detector, including the H-series concurrency tests.
 go test -race ./...
 
-# 静态缓存安全检测
+# Run static cache-safety checks.
 bash scripts/check-cache-safety.sh
 ```
 

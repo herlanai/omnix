@@ -1,11 +1,7 @@
-{{- /* ==========================================================================
-   omnix 站点覆盖：Hextra 主题 sidebar.html
-   --------------------------------------------------------------------------
-   与主题原版唯一差异：首页（hextra-home，$disableSidebar=true）的移动端导航
-   不再渲染 site.Home 的语言分组树（会出现 "Ens"/"Zh-Cns" 等自动生成标签），
-   改为渲染顶部主导航菜单（site.Menus.main），保证移动端汉堡菜单可用且美观。
-   其余逻辑与主题保持一致，便于跟随上游升级。
-   ========================================================================== */ -}}
+{{- /* omnix override of Hextra's sidebar.html.
+ * When the homepage disables the sidebar, render site.Menus.main for mobile
+ * navigation instead of site.Home's generated language groups such as Ens and
+ * Zh-Cns. Keep other behavior aligned with the theme. */ -}}
 
 {{- $context := .context -}}
 
@@ -33,8 +29,8 @@
   <div class="hextra-scrollbar hx-overflow-y-auto hx-overflow-x-hidden hx-p-4 hx-grow md:hx-h-[calc(100vh-var(--navbar-height)-var(--menu-height))]">
     <ul class="hx-flex hx-flex-col hx-gap-1 md:hx-hidden">
       {{- if $disableSidebar -}}
-        {{- /* omnix 定制：首页禁用侧边栏时，移动端导航改为渲染顶部主导航菜单，
-             避免 site.Home 语言分组树出现 "Ens"/"Zh-Cns" 等丑陋自动标签 */ -}}
+        {{- /* On homepages without a sidebar, use the main navigation menu for mobile users
+ * instead of generated language-group labels such as Ens and Zh-Cns. */ -}}
         {{- range site.Menus.main -}}
           {{- $name := or (T .Identifier) .Name -}}
           {{- $link := .URL -}}
@@ -62,7 +58,7 @@
       </ul>
     {{ end -}}
   </div>
-  {{- /* omnix 定制：移除底部语言/主题切换条（语言切换已移到导航栏右上角，主题切换已移到导航栏） */ -}}
+  {{- /* omnix: language and theme controls now live in the top-right navigation bar. */ -}}
 </aside>
 
 {{- define "sidebar-main" -}}

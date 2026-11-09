@@ -1,9 +1,5 @@
-// 本文件对应任务 H05：持久化 IO 内存复用（sync.Pool 复用 bytes.Buffer / bufio.Writer）。
-//
-// 验证目标：
-//   1. 功能：新 pooled 路径下 Load/Append 字节完全等价于旧实现（round-trip 一致）。
-//   2. PoolHits ≥ N（N 次写 → 至少 N×2 pooled hits：buffer + bufio writer）。
-//   3. Benchmark：100 sessions × 200 events 落盘，对比「旧实现」的 allocs/op vs H05。
+// H05 pooled persistence tests verify round-trip equivalence, observable buffer/writer pool reuse,
+// and allocation benchmarks for 100 sessions with 200 events each.
 package tests
 
 import (
@@ -16,7 +12,7 @@ import (
 	"github.com/herlanai/omnix/pkg/session"
 )
 
-// genEventsH05 造 n 条小事件。
+// genEventsH05 constructs n small events.
 func genEventsH05(n int) []session.SessionEvent {
 	evs := make([]session.SessionEvent, 0, n)
 	for i := 0; i < n; i++ {
@@ -39,12 +35,10 @@ func genEventsH05(n int) []session.SessionEvent {
 	return evs
 }
 
-// ============================================================================
-// 1. 功能：Load/Append 字节级等价
-// ============================================================================
+// 1. Load/Append round-trip equivalence.
 
-// TestH05PersistenceRoundTripEquivalent 验证 pooled IO 路径下写入 → Load 回来的
-// 事件数量/内容/Seq 完全等价（Encoder 换行差异不影响 Load 解析）。
+// TestH05PersistenceRoundTripEquivalent verifies event count, content, and sequence numbers
+// through pooled IO; encoder newline differences must not affect loading.
 func TestH05PersistenceRoundTripEquivalent(t *testing.T) {
 	dir := t.TempDir()
 
@@ -62,7 +56,7 @@ func TestH05PersistenceRoundTripEquivalent(t *testing.T) {
 
 	events := genEventsH05(200)
 
-	// 用 Append 批量写入（通过 Flush 强制落盘）。
+	// Append a batch and force persistence with Flush.
 	for _, ev := range events {
 		if err := j.Append(ctx, id, ev); err != nil {
 			t.Fatalf("Append 失败: %v", err)
@@ -85,12 +79,13 @@ func TestH05PersistenceRoundTripEquivalent(t *testing.T) {
 		}
 	}
 
-	// Pool hits 统计：至少 events*2（marshal buffer × 1 + bufio.Writer × 1）。
+	// Inspect pool reuse for marshaling buffers and buffered writers.
 	stats := persistence.ReadJSONLIOStats()
 	if stats.MarshaledEvents != uint64(len(events)) {
 		t.Fatalf("MarshaledEvents = %d, want %d", stats.MarshaledEvents, len(events))
 	}
-	// 每个事件 1 次 marshal buffer 命中 + 每批 flush 1 次 bufio writer 命中（至少 1）：
+	// Expect one marshaling-buffer acquisition per event and at least one buffered-writer acquisition
+	// per flush batch.
 	minHits := uint64(len(events)) + 1
 	if stats.PooledBufferHits < minHits {
 		t.Fatalf("PooledBufferHits = %d, want >= %d", stats.PooledBufferHits, minHits)
@@ -100,7 +95,7 @@ func TestH05PersistenceRoundTripEquivalent(t *testing.T) {
 	}
 }
 
-// TestH05RewriteEquivalent 验证 rewrite（崩溃修复重写）→ Load 等价。
+// TestH05RewriteEquivalent checks persistence compatibility when reloading written events.
 func TestH05RewriteEquivalent(t *testing.T) {
 	dir := t.TempDir()
 	persistence.ResetJSONLIOStats()
@@ -112,12 +107,12 @@ func TestH05RewriteEquivalent(t *testing.T) {
 	ctx := context.Background()
 	id := brand.NewSessionID("h05-rw")
 	_ = j.SaveHeader(ctx, session.NewSessionHeader(id, "/ws"))
-	// 先写一批
+	// Write an initial batch.
 	events := genEventsH05(120)
 	for _, ev := range events {
 		_ = j.Append(ctx, id, ev)
 	}
-	// 直接 Load → Snapshot(=Flush + Load) 查看
+	// Inspect it through Snapshot, which flushes and loads.
 	n, err := j.Snapshot(ctx, id)
 	if err != nil {
 		t.Fatal(err)
@@ -125,7 +120,7 @@ func TestH05RewriteEquivalent(t *testing.T) {
 	if n != len(events) {
 		t.Fatalf("Snapshot N = %d, want %d", n, len(events))
 	}
-	// 重放 header + events 的字节级兼容性：直接 Load 对比 Seq/Type 与写前一致。
+	// Loaded event sequence numbers and types must match the original header/event stream.
 	_, got, err := j.Load(ctx, id)
 	if err != nil {
 		t.Fatal(err)
@@ -142,18 +137,17 @@ func TestH05RewriteEquivalent(t *testing.T) {
 	if stats.MarshaledEvents < uint64(len(events)) {
 		t.Fatalf("MarshaledEvents = %d, want >= %d", stats.MarshaledEvents, len(events))
 	}
-	// Header 序列化字节计数（SaveHeader 走 headerFile 写，不通过 rewrite 路径，
-	// 这里不为 0 即可——header.json 已落盘意味着 HeadMarshaledBytes 增长）
+	// SaveHeader writes header.json directly; a nonzero HeadMarshaledBytes confirms header
+	// serialization occurred.
 	_ = stats.HeaderMarshaledBytes
 }
 
-// ============================================================================
-// 2. Benchmark：100 sessions × 200 events 批量落盘 —— allocations/op 下降 ≥ 50%
-// ============================================================================
+// 2. Benchmark batched persistence for 100 sessions with 200 events each; target at least 50%
+// fewer allocations.
 
 func BenchmarkH05PersistencePooledIO(b *testing.B) {
 	dir := b.TempDir()
-	// 预热 pool：先造一批 events 写入一次，避免 Bench 第一轮被 New 影响。
+	// Warm the pool before timing to reduce first-use allocation effects.
 	j0, _ := persistence.NewJSONL(filepath.Join(dir, "warm"), 200)
 	warm := genEventsH05(200)
 	for i := 0; i < 100; i++ {

@@ -1,10 +1,10 @@
-// sanitize.go 复刻官方 terminal/terminal-bash 的清洗逻辑：把 PTY 原始输出中的
-// ANSI CSI/OSC 转义序列剥离，并归一化回车换行，得到可安全展示的纯文本。
+// Terminal sanitization matches terminal-bash: strip ANSI CSI/OSC escape sequences
+// from raw PTY output and normalize line endings into displayable plain text.
 package terminal
 
 import "strings"
 
-// StripANSI 移除字符串中的 ANSI 转义序列（CSI、OSC、两字节转义族）。
+// StripANSI removes CSI, OSC, and two-byte ANSI escape sequences.
 func StripANSI(s string) string {
 	var b strings.Builder
 	for i := 0; i < len(s); {
@@ -13,17 +13,17 @@ func StripANSI(s string) string {
 			i++
 			continue
 		}
-		if i+1 >= len(s) { // 末尾孤立 ESC，丢弃。
+		if i+1 >= len(s) { // Discard a trailing lone ESC.
 			break
 		}
 		switch s[i+1] {
-		case '[': // CSI：ESC[ 后读到最终字节（0x40–0x7e）。
+		case '[': // CSI ends at a final byte in 0x40-0x7e after ESC[.
 			j := i + 2
 			for j < len(s) && !(s[j] >= 0x40 && s[j] <= 0x7e) {
 				j++
 			}
 			i = j + 1
-		case ']': // OSC：以 BEL 或 ST(ESC\\) 结束。
+		case ']': // OSC ends at BEL or ST (ESC followed by backslash).
 			j := i + 2
 			for j < len(s) {
 				if s[j] == 0x07 { // BEL
@@ -37,14 +37,14 @@ func StripANSI(s string) string {
 				j++
 			}
 			i = j
-		default: // 两字节转义族（如 ESC 7 / ESC 8）。
+		default: // Two-byte escape sequences, such as ESC 7 and ESC 8.
 			i += 2
 		}
 	}
 	return b.String()
 }
 
-// NormalizeText 归一化终端文本：CRLF 与孤立 CR 转为 LF，并移除 BEL。
+// NormalizeText converts CRLF and lone CR to LF and removes BEL.
 func NormalizeText(s string) string {
 	s = strings.ReplaceAll(s, "\r\n", "\n")
 	s = strings.ReplaceAll(s, "\r", "\n")
@@ -52,7 +52,7 @@ func NormalizeText(s string) string {
 	return s
 }
 
-// Sanitize 一步完成转义剥离与文本归一化。
+// Sanitize strips escapes and normalizes text in one call.
 func Sanitize(s string) string {
 	return NormalizeText(StripANSI(s))
 }

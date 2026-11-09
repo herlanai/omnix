@@ -1,9 +1,7 @@
-// 本文件对应任务 M16：Session Projections 投影注册中心。
-//
-// 对齐上游：packages/core/session-projection
-//
-// SDK 侧读取派生状态的唯一标准接口：禁止直接读 events，必须通过注册的投影读取。
-// 每个投影维护一个 State，订阅 changelog 做增量更新；snapshot 与 fold* 结果一致。
+// The session projection registry (M16) follows upstream session-projection.
+// SDK consumers read derived state through registered projections rather than
+// raw events. Each projection maintains state incrementally and exposes a
+// changelog; snapshots should agree with their fold functions.
 package session
 
 import (
@@ -13,36 +11,36 @@ import (
 	"github.com/herlanai/omnix/pkg/brand"
 )
 
-// ProjectionState 是投影状态的类型约束。
+// ProjectionState constrains projection state types.
 type ProjectionState interface {
-	// Equal 判断两个状态是否相等（用于 changelog 增量判断）。
+	// Equal detects state changes for incremental changelog entries.
 	Equal(other ProjectionState) bool
 }
 
-// ProjectionDefinition 定义单个投影。
+// ProjectionDefinition defines one projection.
 type ProjectionDefinition[S ProjectionState] struct {
-	// ID 投影唯一标识。
+	// ID uniquely identifies the projection.
 	ID brand.ProjectionID
-	// Init 初始状态。
+	// Init is the initial state.
 	Init S
-	// Apply 增量应用一条事件到状态。
+	// Apply incrementally applies an event to state.
 	Apply func(state S, ev SessionEvent) S
-	// Merge 从全部事件重新派生状态（重放；等价于 fold*）。
+	// Merge rebuilds state from complete event history, matching its fold function.
 	Merge func(events []SessionEvent) S
 }
 
-// Projection 是一个已注册投影的运行实例。
+// Projection is a registered projection instance.
 type Projection[S ProjectionState] struct {
 	def   *ProjectionDefinition[S]
 	state S
 }
 
-// State 返回当前投影状态。
+// State returns the current projection state.
 func (p *Projection[S]) State() S {
 	return p.state
 }
 
-// projectionBox 是运行时投影的统一抽象盒（包内私有接口）。
+// projectionBox abstracts runtime projections within this package.
 type projectionBox interface {
 	apply(ev SessionEvent) bool
 	projectionID() brand.ProjectionID
@@ -50,7 +48,7 @@ type projectionBox interface {
 	rebuild(events []SessionEvent)
 }
 
-// 以下方法使 *Projection[S] 实现 projectionBox。
+// These methods implement projectionBox for Projection[S].
 
 func (p *Projection[S]) apply(ev SessionEvent) bool {
 	if p.def == nil || p.def.Apply == nil {
@@ -86,7 +84,7 @@ func (p *Projection[S]) rebuild(events []SessionEvent) {
 	}
 }
 
-// Registry 是投影注册中心。
+// Registry stores registered projections.
 type Registry struct {
 	mu        sync.RWMutex
 	defs      map[string]projectionBox // ProjectionID.Raw() -> projectionBox
@@ -94,24 +92,25 @@ type Registry struct {
 	changelog []ProjectionChange
 }
 
-// ProjectionChange 是投影 changelog 中的一条变更。
+// ProjectionChange records a projection changelog entry.
 type ProjectionChange struct {
-	// ProjectionID 变更的投影。
+	// ProjectionID identifies the projection.
 	ProjectionID brand.ProjectionID `json:"projectionId"`
-	// Seq changelog 序号。
+	// Seq is the changelog sequence number.
 	Seq uint64 `json:"seq"`
-	// EventSeq 触发变更的事件 seq。
+	// EventSeq identifies the triggering event.
 	EventSeq uint64 `json:"eventSeq"`
-	// Changed 状态是否发生变化。
+	// Changed reports whether state changed.
 	Changed bool `json:"changed"`
 }
 
-// NewProjectionRegistry 创建投影注册中心。
+// NewProjectionRegistry creates an empty registry.
 func NewProjectionRegistry() *Registry {
 	return &Registry{defs: map[string]projectionBox{}}
 }
 
-// RegisterProjection 注册一个投影定义（顶层泛型函数，因 Go 方法不支持类型参数）。
+// RegisterProjection registers a definition. It is a generic function because
+// Go methods cannot declare their own type parameters.
 func RegisterProjection[S ProjectionState](r *Registry, def *ProjectionDefinition[S]) (*Projection[S], error) {
 	if def == nil || def.ID.IsZero() {
 		return nil, &projectionError{"nil or zero-id projection"}
@@ -123,12 +122,12 @@ func RegisterProjection[S ProjectionState](r *Registry, def *ProjectionDefinitio
 	return p, nil
 }
 
-// projectionError 是投影错误。
+// projectionError describes a projection failure.
 type projectionError struct{ msg string }
 
 func (e *projectionError) Error() string { return "projection: " + e.msg }
 
-// ApplyEvents 将一批新事件增量应用到全部投影，并生成 changelog。
+// ApplyEvents incrementally updates all projections and records changelog entries.
 func (r *Registry) ApplyEvents(events []SessionEvent) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -146,7 +145,7 @@ func (r *Registry) ApplyEvents(events []SessionEvent) {
 	}
 }
 
-// Changelog 返回 changelog 快照（按产生顺序）。
+// Changelog returns a snapshot in production order.
 func (r *Registry) Changelog() []ProjectionChange {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -155,7 +154,7 @@ func (r *Registry) Changelog() []ProjectionChange {
 	return out
 }
 
-// SnapshotAll 返回全部投影的当前状态快照（按投影 ID 排序）。
+// SnapshotAll returns a map of all current projection states.
 func (r *Registry) SnapshotAll() map[brand.ProjectionID]any {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -171,7 +170,7 @@ func (r *Registry) SnapshotAll() map[brand.ProjectionID]any {
 	return out
 }
 
-// Rebuild 从全部事件重放重建全部投影（等价 fold*，供一致性校验）。
+// Rebuild replays complete history into all projections for consistency checking.
 func (r *Registry) Rebuild(events []SessionEvent) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

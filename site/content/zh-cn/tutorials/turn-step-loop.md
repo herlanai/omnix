@@ -63,13 +63,13 @@ type TurnEndData struct {
 type StepStartData struct {
     Turn   uint64 `json:"turn"`
     Step   uint64 `json:"step"`
-    StepSeq uint64 `json:"stepSeq,omitempty"` // 旧字段别名
+    StepSeq uint64 `json:"stepSeq,omitempty"` // Legacy field alias.
 }
 
 type StepEndData struct {
     Turn   uint64 `json:"turn"`
     Step   uint64 `json:"step"`
-    StepSeq uint64 `json:"stepSeq,omitempty"` // 旧字段别名
+    StepSeq uint64 `json:"stepSeq,omitempty"` // Legacy field alias.
 }
 ```
 
@@ -169,7 +169,7 @@ Turn 可以因六种原因关闭：
 // pkg/session/session.go
 const (
     ReasonCompleted   TurnEndReason = "completed"
-    ReasonFinished    TurnEndReason = "finished"    // 旧字段别名，等同于 completed
+    ReasonFinished    TurnEndReason = "finished"    // Legacy field alias equivalent to completed.
     ReasonInterrupted TurnEndReason = "interrupted"
     ReasonAborted     TurnEndReason = "aborted"
     ReasonBlocked     TurnEndReason = "blocked"
@@ -185,16 +185,16 @@ const (
 `SessionLog` 内部维护完整的循环状态，并暴露只读查询方法：
 
 ```go
-// 下一个 turn 编号（从 0 开始，每次 turn/end 后递增）
+// Next turn number, starting at zero and incrementing after each turn/end.
 func (sl *SessionLog) NextTurn() uint64
 
-// 当前 turn 内下一个 step 编号（从 1 开始，每次 turn/start 时重置）
+// Next step number within the turn, reset to one at each turn/start.
 func (sl *SessionLog) NextStep() uint64
 
-// 当前打开的 turn（如果没有打开的 turn，返回 0, false）
+// Current open turn, or 0, false if none.
 func (sl *SessionLog) OpenTurn() (uint64, bool)
 
-// 当前打开的 step（如果没有打开的 step，返回 0, false）
+// Current open step, or 0, false if none.
 func (sl *SessionLog) OpenStep() (uint64, bool)
 ```
 
@@ -205,7 +205,7 @@ Agent 在创建 `turn/start` 事件之前查询 `NextTurn()`，确保编号始�
 ```go
 // pkg/agent/agent.go — runTurn
 func (a *Agent) runTurn(req *turnReq) {
-    turnIdx := a.log.NextTurn()  // 查询当前编号
+    turnIdx := a.log.NextTurn()  // Query the current sequence numbers.
 
     if _, err := a.log.Append(session.TurnStartData{Turn: turnIdx}); err != nil {
         return
@@ -234,7 +234,7 @@ func (a *Agent) runTurn(req *turnReq) {
 ```go
 // pkg/persistence/jsonl.go — repairOrphanTurn
 func repairOrphanTurn(events *[]session.SessionEvent) int {
-    // 扫描所有事件，判断末尾是否有打开的 turn
+    // Scan all events to determine whether a turn remains open.
     turnOpen := false
     var openTurn uint64
     for _, ev := range *events {
@@ -242,7 +242,7 @@ func repairOrphanTurn(events *[]session.SessionEvent) int {
         case session.EventTurnStart:
             turnOpen = true
             if td, ok := ev.Data.(session.TurnStartData); ok {
-                openTurn = td.Turn  // 捕获 turn 编号
+                openTurn = td.Turn  // Capture the turn number.
             }
         case session.EventTurnEnd:
             turnOpen = false
@@ -251,7 +251,7 @@ func repairOrphanTurn(events *[]session.SessionEvent) int {
     if !turnOpen {
         return 0
     }
-    // 追加合成的 turn/end，携带正确的 turn 编号
+    // Append a synthetic turn/end with the correct turn number.
     last := (*events)[len(*events)-1]
     repaired := session.SessionEvent{
         Seq:  last.Seq + 1,

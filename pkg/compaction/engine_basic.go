@@ -1,8 +1,7 @@
-// 本文件实现 compaction 的 BasicEngine（任务 S01 引擎库）。
-//
-// BasicEngine 是不依赖 LLM 的确定性摘要引擎：从被压缩的旧事件中抽取用户消息，
-// 拼接为一段「过去对话摘要」，并受 maxRunes 约束截断。用于无 LLM 键或离线场景，
-// 保证压缩永远可用；有 LLM 时可用 LLMEngine 替换获得更精炼摘要。
+// BasicEngine is the deterministic, LLM-free summarizer for S01. It extracts
+// user messages into a past-conversation summary bounded by maxRunes. This keeps
+// compaction available offline or without credentials; LLMEngine can replace it
+// when more concise model-generated summaries are desired.
 package compaction
 
 import (
@@ -13,22 +12,22 @@ import (
 	"github.com/herlanai/omnix/pkg/session"
 )
 
-// BasicEngineSumm 是 BasicEngine 生成的摘要标题/前缀。
+// BasicEngineSumm is the summary title or prefix used by BasicEngine.
 const BasicEngineSumm = "【摘要】过去对话摘要如下："
 
-// BasicEngine 是一个确定性的摘要引擎（无 LLM）。
+// BasicEngine produces deterministic summaries without an LLM.
 type BasicEngine struct{}
 
-// Summarize 抽取旧事件中的用户消息，前若干条作为摘要；超长截断到 maxRunes。
+// Summarize uses the first few user messages, truncated to maxRunes.
 func (b *BasicEngine) Summarize(ctx context.Context, events []session.SessionEvent, maxRunes int) (string, error) {
 	_ = ctx
-	// 收集用户消息并保持原顺序（按 seq）。
+	// Collect user messages in sequence order.
 	type pair struct {
 		seq uint64
 		msg string
 	}
 	msgs := []pair{}
-	// 先复制避免改动输入。
+	// Copy first to avoid modifying the input.
 	cp := append([]session.SessionEvent(nil), events...)
 	sort.SliceStable(cp, func(i, j int) bool { return cp[i].Seq < cp[j].Seq })
 	for _, ev := range cp {
@@ -38,7 +37,7 @@ func (b *BasicEngine) Summarize(ctx context.Context, events []session.SessionEve
 			}
 		}
 	}
-	// 最多取前 3 条作为代表。
+	// Use at most the first three messages as representatives.
 	const maxItems = 3
 	var sb strings.Builder
 	sb.WriteString(BasicEngineSumm)
@@ -54,7 +53,7 @@ func (b *BasicEngine) Summarize(ctx context.Context, events []session.SessionEve
 	return truncateRunes(sb.String(), maxRunes), nil
 }
 
-// truncateRunes 按 rune 截断并加省略号。
+// truncateRunes truncates by rune and appends an ellipsis.
 func truncateRunes(s string, max int) string {
 	if max <= 0 {
 		return ""

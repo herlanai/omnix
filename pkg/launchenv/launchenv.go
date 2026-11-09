@@ -1,11 +1,11 @@
-// Package launchenv 复刻官方 util/launch-environment：启动时把多层环境变量
-// （进程环境 > 项目 .env > 用户 .env）冻结成不可变快照，按固定信任顺序解析，
-// 并在 Windows 上对变量名做大小写折叠。
+// Package launchenv freezes environment layers at launch, matching util/launch-environment.
+// Trust order is process environment, project .env, then user .env. Windows variable
+// names are case-folded.
 package launchenv
 
 import "runtime"
 
-// Source 标识值来自哪一层，信任度从高到低。
+// Source identifies a layer in descending trust order.
 type Source string
 
 const (
@@ -14,14 +14,14 @@ const (
 	SourceUserEnv    Source = "user-env"
 )
 
-// sourceOrder 为固定信任顺序。
+// sourceOrder is the fixed trust order.
 var sourceOrder = []Source{SourceProcess, SourceProjectEnv, SourceUserEnv}
 
-// Entry 是一次解析命中的条目。
+// Entry is a resolved environment entry.
 type Entry struct {
 	Value  string
 	Source Source
-	Path   string // 来源文件路径，进程层为空
+	Path   string // Source file path; empty for process environment.
 }
 
 type layer struct {
@@ -29,19 +29,19 @@ type layer struct {
 	values map[string]string
 }
 
-// Snapshot 是一次启动的不可变环境快照。
+// Snapshot is an immutable launch environment.
 type Snapshot struct {
 	bySource map[Source]*layer
 }
 
-// LayerInput 是构造快照时一层的原始内容。
+// LayerInput contains raw input for one layer.
 type LayerInput struct {
 	Source Source
 	Path   string
 	Values map[string]string
 }
 
-// New 根据各层内容构造快照（传入顺序任意，解析按固定信任顺序）。
+// New accepts layers in any order and resolves them in fixed trust order.
 func New(layers []LayerInput) *Snapshot {
 	s := &Snapshot{bySource: map[Source]*layer{}}
 	for _, l := range layers {
@@ -54,12 +54,12 @@ func New(layers []LayerInput) *Snapshot {
 	return s
 }
 
-// Get 跨所有层按信任顺序解析一个变量。
+// Get resolves a variable across all layers in trust order.
 func (s *Snapshot) Get(name string) (Entry, bool) {
 	return s.GetFrom(name, sourceOrder)
 }
 
-// GetFrom 只在指定层中按固定信任顺序解析。
+// GetFrom resolves only the specified layers in fixed trust order.
 func (s *Snapshot) GetFrom(name string, sources []Source) (Entry, bool) {
 	key := lookupKey(name)
 	for _, src := range sourceOrder {

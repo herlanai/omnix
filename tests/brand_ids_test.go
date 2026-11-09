@@ -1,5 +1,5 @@
-// Package tests 存放 omnix 全工程跨包集成测试。
-// 本文件对应任务 M01：Branded ID 类型封装。
+// Package tests contains cross-package omnix integration tests. This file covers M01 branded
+// identifier types.
 package tests
 
 import (
@@ -10,9 +10,9 @@ import (
 	"github.com/herlanai/omnix/pkg/brand"
 )
 
-// TestBrandedRoundTrip 验证具体品牌类型的构造与 String/IsZero/Equal 全链路。
+// TestBrandedRoundTrip verifies constructors and String, IsZero, and Equal methods.
 func TestBrandedRoundTrip(t *testing.T) {
-	// 构造品牌化 SessionID
+	// Construct a branded SessionID.
 	sid := brand.NewSessionID("sess_123456")
 	if sid.IsZero() {
 		t.Fatal("NewSessionID 构造后不应为零值")
@@ -21,14 +21,14 @@ func TestBrandedRoundTrip(t *testing.T) {
 		t.Fatalf("String() = %q, want %q", sid.String(), "sess_123456")
 	}
 
-	// 零值语义（注：不能写 if !brand.SessionID{}.IsZero()，Go 解析器会把复合字面量
-	// 误判为块语法，属于解析器边角限制，故先声明变量再调用方法）
+	// Check zero-value semantics using a variable to avoid composite-literal ambiguity in an if
+	// condition.
 	var zero brand.SessionID
 	if !zero.IsZero() {
 		t.Fatal("零值 SessionID 应当 IsZero()==true")
 	}
 
-	// Equal 比较
+	// Compare identifiers with Equal.
 	other := brand.NewSessionID("sess_123456")
 	if !sid.Equal(other) {
 		t.Fatal("相同字符串构造的 SessionID 应相等")
@@ -39,7 +39,7 @@ func TestBrandedRoundTrip(t *testing.T) {
 	}
 }
 
-// TestBrandedParse 验证 Parse 对空串的拒绝行为。
+// TestBrandedParse rejects empty strings.
 func TestBrandedParse(t *testing.T) {
 	if _, err := brand.ParseToolCallID(""); err == nil {
 		t.Fatal("ParseToolCallID 空串应返回错误")
@@ -53,7 +53,7 @@ func TestBrandedParse(t *testing.T) {
 	}
 }
 
-// TestBrandedJSON 验证 MarshalJSON / UnmarshalJSON 往返一致。
+// TestBrandedJSON verifies JSON marshal/unmarshal round trips.
 func TestBrandedJSON(t *testing.T) {
 	original := brand.NewJobID("job_42")
 
@@ -73,17 +73,16 @@ func TestBrandedJSON(t *testing.T) {
 		t.Fatalf("JSON 往返后不等: %q vs %q", restored.String(), original.String())
 	}
 
-	// 非法 JSON 应报错而不是静默
+	// Invalid JSON must return an error rather than fail silently.
 	var bad brand.SkillID
 	if err := json.Unmarshal([]byte(`{"a":1}`), &bad); err == nil {
 		t.Fatal("非字符串 JSON 应反序列化失败")
 	}
 }
 
-// TestBrandedTypeIsolation 验证品牌类型彼此隔离。
-// 运行时证明：通过 fmt.Sprintf("%T") 输出底层类型名，不同品牌类型名必然不同
-// （SessionID → brand.Branded[brand.sessionIDTag]，ToolCallID → brand.Branded[brand.toolCallIDTag]）。
-// 编译期证明：任何把 SessionID 传给期望 ToolCallID 参数的位置都会直接编译失败。
+// TestBrandedTypeIsolation distinguishes runtime type names such as Branded[sessionIDTag] and
+// Branded[toolCallIDTag]. At compile time, passing a SessionID where a ToolCallID is required is
+// rejected.
 func TestBrandedTypeIsolation(t *testing.T) {
 	sid := brand.NewSessionID("s1")
 	tcid := brand.NewToolCallID("t1")
@@ -96,18 +95,18 @@ func TestBrandedTypeIsolation(t *testing.T) {
 		t.Fatal("JobID 与 ToolCallID 的底层类型名不应相同")
 	}
 
-	// 断言各类型的确切底层类型名（标签名不可见，但可通过 %T 区分）
+	// Assert exact runtime type names; private tags remain distinguishable through %T.
 	t.Logf("SessionID type = %s", typeName(sid))
 	t.Logf("ToolCallID type = %s", typeName(tcid))
 	t.Logf("JobID type = %s", typeName(job))
 }
 
-// typeName 返回任意值的运行时类型字符串，用于品牌隔离性测试。
+// typeName returns a runtime type name for branded-type isolation tests.
 func typeName(x any) string {
 	return fmt.Sprintf("%T", x)
 }
 
-// TestBrandedSQL 验证 driver.Valuer / sql.Scanner 接口，供持久化层复用。
+// TestBrandedSQL verifies driver.Valuer and sql.Scanner for persistence integration.
 func TestBrandedSQL(t *testing.T) {
 	sid := brand.NewSessionID("sess_sql")
 
@@ -127,7 +126,7 @@ func TestBrandedSQL(t *testing.T) {
 		t.Fatal("Scan 后应与原值相等")
 	}
 
-	// 从 []byte 扫描
+	// Scan from []byte.
 	var fromBytes brand.SessionID
 	if err := fromBytes.Scan([]byte("sess_sql")); err != nil {
 		t.Fatalf("Scan([]byte) 失败: %v", err)
@@ -136,7 +135,7 @@ func TestBrandedSQL(t *testing.T) {
 		t.Fatal("Scan([]byte) 后应与原值相等")
 	}
 
-	// 从 nil 扫描 → 零值
+	// Scanning nil produces the zero value.
 	var fromNil brand.SessionID
 	if err := fromNil.Scan(nil); err != nil {
 		t.Fatalf("Scan(nil) 失败: %v", err)
@@ -145,13 +144,13 @@ func TestBrandedSQL(t *testing.T) {
 		t.Fatal("Scan(nil) 后应为零值")
 	}
 
-	// 非法类型扫描应报错
+	// Scanning an unsupported type must fail.
 	if err := fromNil.Scan(42); err == nil {
 		t.Fatal("Scan(int) 应报错")
 	}
 }
 
-// TestBytesBranded 验证 Bytes[T] 的构造、JSON Base64 往返与字节访问。
+// TestBytesBranded verifies Bytes[T] construction, JSON base64 round trips, and byte access.
 func TestBytesBranded(t *testing.T) {
 	raw := []byte("hello world \x00 binary")
 	bs := brand.NewBytes[brand.AttachmentID](raw)
@@ -166,7 +165,7 @@ func TestBytesBranded(t *testing.T) {
 		t.Fatal("Bytes() 应还原原始字节")
 	}
 
-	// JSON Base64 往返
+	// JSON base64 round trip.
 	data, err := json.Marshal(bs)
 	if err != nil {
 		t.Fatalf("Bytes Marshal 失败: %v", err)
@@ -179,7 +178,7 @@ func TestBytesBranded(t *testing.T) {
 		t.Fatal("Bytes JSON 往返后应还原原始字节")
 	}
 
-	// 零值
+	// Zero value.
 	if !brand.ZeroBytes[brand.AttachmentID]().IsZero() {
 		t.Fatal("ZeroBytes 应 IsZero()==true")
 	}

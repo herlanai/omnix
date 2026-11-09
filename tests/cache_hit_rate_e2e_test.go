@@ -1,13 +1,7 @@
-// Package tests 的 N07 缓存命中率 E2E 验收套件（5 个测试 + Mock DeepSeek Server）。
-//
-// 场景（对齐 tasks.json N07 验收）：
-//   - T1 50 轮稳定场景平均命中率 ≥ 95%
-//   - T2 切 preset 后前 5 轮 < 50%，后续稳定上升，最后 5 轮 ≥ 80%
-//   - T3 compaction 后 30 轮内恢复 ≥ 95%（此处用触发 prompt 变短模拟重建）
-//   - T4 10 个并发 session 各 ≥ 85%
-//   - T5 5/10/20 工具场景下命中率均 ≥ 95%
-//
-// 每轮输出命中率 + 平均值 + 最低值。
+// N07 cache E2E tests use a mock DeepSeek server: 50 stable turns average at least 95%; switching
+// presets initially drops below 50% then recovers to at least 80% over the final five turns;
+// compaction recovers to 95% within 30 turns; ten concurrent sessions each reach 85%; and
+// 5/10/20-tool scenarios each reach 95%. Log per-turn, average, and minimum ratios.
 package tests
 
 import (
@@ -19,8 +13,9 @@ import (
 	"github.com/herlanai/omnix/tests/testutil"
 )
 
-// buildPrompt 构造一轮 prompt（system + 累积用户轮 + preset + tools 块 + 尾部消息）。
-// base（system+preset+tools）刻意做大，使单轮新追加相对占比小，接近真实 omnix 长 prompt。
+// buildPrompt combines system text, accumulated turns, preset, tools, and a final message. The
+// large fixed prefix keeps each appended turn small relative to the prompt, resembling real omnix
+// usage.
 func buildPrompt(system, preset string, toolCount int, rounds int) string {
 	var sb strings.Builder
 	sb.WriteString("<system>You are a capable DeepSeek agent following workspace policy and plan mode. ")
@@ -38,7 +33,7 @@ func buildPrompt(system, preset string, toolCount int, rounds int) string {
 	return sb.String()
 }
 
-// avgAndMin 计算命中率序列的平均与最低。
+// avgAndMin returns the average and minimum hit ratios.
 func avgAndMin(ratios []float64) (avg, min float64) {
 	if len(ratios) == 0 {
 		return 0, 0
@@ -54,10 +49,10 @@ func avgAndMin(ratios []float64) (avg, min float64) {
 	return sum / float64(len(ratios)), min
 }
 
-// TestN07E2E_T1_50TurnsStableHitRate 验证 T1：50 轮稳定命中率 ≥ 95%。
+// TestN07E2E_T1_50TurnsStableHitRate verifies at least 95% over 50 stable turns.
 func TestN07E2E_T1_50TurnsStableHitRate(t *testing.T) {
 	sim := testutil.NewPrefixCacheSimulator()
-	// 预热前 3 轮（不计入，让缓存建立）。
+	// Warm up for three unmeasured turns to establish the cache.
 	for i := 0; i < 3; i++ {
 		_, _ = sim.Simulate(buildPrompt("omnix", "default", 10, i))
 	}
@@ -73,14 +68,15 @@ func TestN07E2E_T1_50TurnsStableHitRate(t *testing.T) {
 	}
 }
 
-// TestN07E2E_T2_PresetSwitch 验证 T2：切 preset 使缓存失效（首请求 <50%），随后稳定上升。
+// TestN07E2E_T2_PresetSwitch verifies initial invalidation below 50% followed by recovery.
 func TestN07E2E_T2_PresetSwitch(t *testing.T) {
 	sim := testutil.NewPrefixCacheSimulator()
-	// 前 20 轮 default preset。
+	// Use the default preset for the first 20 turns.
 	for i := 0; i < 20; i++ {
 		_, _ = sim.Simulate(buildPrompt("omnix", "default", 10, i))
 	}
-	// 切到 danger preset → 首个新 preset 请求命中率骤降（缓存失效），随后因新前缀重复而攀升。
+	// Switch to danger; the first request invalidates the cache, then repeated prefixes improve the
+	// ratio.
 	var post []float64
 	for i := 0; i < 30; i++ {
 		hit, miss := sim.Simulate(buildPrompt("omnix", "danger", 10, i))
@@ -98,13 +94,14 @@ func TestN07E2E_T2_PresetSwitch(t *testing.T) {
 	}
 }
 
-// TestN07E2E_T3_CompactionRecovery 验证 T3：compaction 后 30 轮内恢复 ≥95%。
+// TestN07E2E_T3_CompactionRecovery verifies recovery to at least 95% within 30 turns.
 func TestN07E2E_T3_CompactionRecovery(t *testing.T) {
 	sim := testutil.NewPrefixCacheSimulator()
 	for i := 0; i < 50; i++ {
 		_, _ = sim.Simulate(buildPrompt("omnix", "default", 10, i))
 	}
-	// compaction：丢弃老历史，prompt 变短＝重建；预热 3 轮后连续 30 轮。
+	// Simulate compaction by dropping old history and shortening the prompt; warm up three turns
+	// before measuring 30 turns.
 	for i := 0; i < 3; i++ {
 		_, _ = sim.Simulate(buildPrompt("omnix", "default", 10, i))
 	}
@@ -120,7 +117,7 @@ func TestN07E2E_T3_CompactionRecovery(t *testing.T) {
 	}
 }
 
-// TestN07E2E_T4_MultiSession 验证 T4：10 并发 session 各 ≥85%。
+// TestN07E2E_T4_MultiSession verifies at least 85% for ten concurrent sessions.
 func TestN07E2E_T4_MultiSession(t *testing.T) {
 	const n = 10
 	sims := make([]*testutil.PrefixCacheSimulator, n)
@@ -134,7 +131,7 @@ func TestN07E2E_T4_MultiSession(t *testing.T) {
 		go func(idx int) {
 			defer wg.Done()
 			var ratios []float64
-			for i := 3; i < 33; i++ { // 前 3 轮预热
+			for i := 3; i < 33; i++ { // Warm up for the first three turns.
 				hit, miss := sims[idx].Simulate(buildPrompt(fmt.Sprintf("worker%d", idx), "default", 8, i))
 				ratios = append(ratios, float64(hit)/float64(hit+miss))
 			}
@@ -150,7 +147,7 @@ func TestN07E2E_T4_MultiSession(t *testing.T) {
 	}
 }
 
-// TestN07E2E_T5_ToolCount 验证 T5：5/10/20 工具场景命中率均 ≥95%。
+// TestN07E2E_T5_ToolCount verifies at least 95% with 5, 10, and 20 tools.
 func TestN07E2E_T5_ToolCount(t *testing.T) {
 	for _, tc := range []int{5, 10, 20} {
 		sim := testutil.NewPrefixCacheSimulator()

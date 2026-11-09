@@ -1,4 +1,4 @@
-// Package tests 的 timecontext 验收测试。
+// Time-context tests.
 package tests
 
 import (

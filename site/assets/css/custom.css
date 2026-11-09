@@ -1,46 +1,36 @@
-/* ============================================================================
- * omnix 文档站自定义主题
- * ----------------------------------------------------------------------------
- * 风格参考：https://www.deepseek.com/harness/
- *   - 3D 玻璃拟态（Glassmorphism）：半透明表面 + backdrop blur + 内高光
- *   - 暗色 + 明媚：深蓝黑底 + 品牌蓝 #4D6BFE / 青 #22d3ee 高亮
- *   - 网格背景 + 辉光光斑 + 旋转渐变描边 + hover 抬升交互动画
- *
- * 说明：
- *   - 该文件在 head-css.html 中以常规 <link> 注入，优先级高于主题样式；
- *   - 为保持「暗色 + 明媚」的统一观感，多数规则不区分 light/dark，
- *     即使切换主题也保持玻璃暗色视觉。
- * ========================================================================== */
+/* omnix documentation theme, inspired by https://www.deepseek.com/harness/.
+ * Translucent surfaces, backdrop blur, and inner highlights create a glass effect.
+ * Blue-black backgrounds, blue/cyan accents, grids, glows, and hover lifts
+ * provide depth. A normal link in head-css.html loads these overrides after
+ * theme styles. Most rules preserve the dark glass appearance in both modes. */
 
-/* ---------------------------------------------------------------------------
- * 0. 字体与设计令牌（对齐 DeepSeek Harness）
- * ------------------------------------------------------------------------- */
+/* 0. Fonts and design tokens aligned with DeepSeek Harness. */
 @import url("https://fonts.googleapis.com/css2?family=Host+Grotesk:wght@400;500;600;700;800&family=DM+Sans:wght@400;500;600;700&display=swap");
 
 :root {
-  /* 品牌色：DeepSeek Harness 主蓝 #4D6BFE（--ds-rgb-primary: 77,107,254） */
+  /* Brand blue: DeepSeek Harness #4D6BFE (--ds-rgb-primary: 77,107,254). */
   --omnix-brand: #4d6bfe;
   --omnix-brand-rgb: 77, 107, 254;
   --omnix-brand-deep: #3b5bdb;
   --omnix-cyan: #22d3ee;
   --omnix-cyan-rgb: 34, 211, 238;
-  --omnix-violet: #a78bfa;        /* 紫 */
+  --omnix-violet: #a78bfa;        /* Violet. */
   --omnix-violet-rgb: 167, 139, 250;
-  --omnix-pink: #f472b6;          /* 粉 */
+  --omnix-pink: #f472b6;          /* Pink. */
   --omnix-pink-rgb: 244, 114, 182;
 
-  /* 背景 / 表面 / 描边 / 文字 */
-  --omnix-bg: #0b0e17;            /* 页面底色：深蓝黑 */
-  --omnix-bg-soft: #0f1420;       /* 次级表面 */
-  --omnix-surface: rgba(255, 255, 255, 0.055);      /* 玻璃面 */
-  --omnix-surface-hover: rgba(255, 255, 255, 0.09); /* 玻璃面 hover */
-  --omnix-border: rgba(255, 255, 255, 0.10);        /* 玻璃描边 */
+  /* Backgrounds, surfaces, borders, and text. */
+  --omnix-bg: #0b0e17;            /* Blue-black page background. */
+  --omnix-bg-soft: #0f1420;       /* Secondary surface. */
+  --omnix-surface: rgba(255, 255, 255, 0.055);      /* Glass surface. */
+  --omnix-surface-hover: rgba(255, 255, 255, 0.09); /* Glass surface on hover. */
+  --omnix-border: rgba(255, 255, 255, 0.10);        /* Glass border. */
   --omnix-border-strong: rgba(255, 255, 255, 0.18);
-  --omnix-text: #e8edff;          /* 主文字：蓝白 */
+  --omnix-text: #e8edff;          /* Primary blue-white text. */
   --omnix-text-secondary: #9aa3c7;
   --omnix-text-dim: #6b759e;
 
-  /* 字体栈 */
+  /* Font stacks. */
   --omnix-font-display: "Host Grotesk", "DM Sans", ui-sans-serif, system-ui,
     -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
   --omnix-font-sans: "DM Sans", ui-sans-serif, system-ui, -apple-system,
@@ -49,11 +39,9 @@
     "Consolas", monospace;
 }
 
-/* ---------------------------------------------------------------------------
- * 1. 全局基底：暗色 + 网格 + 辉光光斑
- * ------------------------------------------------------------------------- */
+/* 1. Dark page foundation with a grid and glows. */
 html {
-  /* 全站统一使用玻璃暗色风格，忽略主题切换产生的浅色背景 */
+  /* Keep the dark glass appearance even when the theme selects a light background. */
   background-color: var(--omnix-bg);
   scroll-behavior: smooth;
 }
@@ -63,10 +51,10 @@ body {
   color: var(--omnix-text);
   background-color: var(--omnix-bg);
   background-image:
-    /* 细网格线（参考 .ds-grid-bg：90px 网格 + 径向遮罩） */
+    /* Fine grid lines inspired by .ds-grid-bg: 90px cells and a radial mask. */
     linear-gradient(rgba(255, 255, 255, 0.025) 1px, transparent 1px),
     linear-gradient(90deg, rgba(255, 255, 255, 0.025) 1px, transparent 1px),
-    /* 顶部品牌辉光：蓝 → 青 → 粉紫混搭 */
+    /* Top glow blends blue, cyan, pink, and violet. */
     radial-gradient(60rem 32rem at 50% -12%, rgba(var(--omnix-brand-rgb), 0.28), transparent 60%),
     radial-gradient(40rem 24rem at 82% 8%, rgba(var(--omnix-cyan-rgb), 0.12), transparent 60%),
     radial-gradient(46rem 30rem at 12% 28%, rgba(var(--omnix-violet-rgb), 0.14), transparent 60%),
@@ -76,14 +64,14 @@ body {
   min-height: 100vh;
 }
 
-/* 亮色主题下也强制暗色视觉 */
+/* Retain dark styling in light mode. */
 html.light body,
 html:not(.dark) body {
   background-color: var(--omnix-bg);
   color: var(--omnix-text);
 }
 
-/* 文字渲染 */
+/* Text rendering. */
 h1, h2, h3, h4, h5, h6 {
   font-family: var(--omnix-font-display);
   color: var(--omnix-text);
@@ -94,16 +82,14 @@ a {
   transition: color 0.18s ease;
 }
 
-/* 选区高亮（对齐参考站 ::selection） */
+/* Selection highlight matching the reference site's ::selection. */
 ::selection {
   background-color: var(--omnix-brand);
   color: #fff;
 }
 
-/* ---------------------------------------------------------------------------
- * 2. 顶部导航栏：玻璃拟态
- * ------------------------------------------------------------------------- */
-/* 导航条底部模糊层 */
+/* 2. Glass navigation bar. */
+/* Blurred layer below the navigation bar. */
 .nav-container-blur {
   background: rgba(11, 14, 23, 0.62) !important;
   backdrop-filter: blur(18px) saturate(160%);
@@ -112,15 +98,13 @@ a {
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35) !important;
 }
 
-/* 导航内链接 hover 高亮 */
+/* Navigation link hover highlight. */
 nav a:hover {
   color: var(--omnix-cyan) !important;
 }
 
-/* ---------------------------------------------------------------------------
- * 3. Hero：渐变标题 + 辉光徽章
- * ------------------------------------------------------------------------- */
-/* 主标题：品牌蓝 → 紫 → 粉渐变（覆盖 Hextra 默认灰渐变） */
+/* 3. Hero with a gradient title and glowing badge. */
+/* Blue-to-violet-to-pink title gradient overrides Hextra's gray gradient. */
 h1.not-prose.hx-text-4xl.hx-bg-clip-text,
 h1.hx-bg-clip-text.hx-bg-gradient-to-r,
 .hextra-home h1 {
@@ -133,7 +117,7 @@ h1.hx-bg-clip-text.hx-bg-gradient-to-r,
   font-family: var(--omnix-font-display);
 }
 
-/* 首页 hero-badge：玻璃胶囊 + 呼吸绿点 */
+/* Homepage hero badge: glass pill with a pulsing green dot. */
 .hextra-home .hx-rounded-full.hx-bg-gray-100,
 .hextra-home a.not-prose.hx-rounded-full {
   background: rgba(var(--omnix-brand-rgb), 0.12) !important;
@@ -149,7 +133,7 @@ h1.hx-bg-clip-text.hx-bg-gradient-to-r,
   color: var(--omnix-text-secondary) !important;
 }
 
-/* 首页 hero 品牌图标：玻璃圆角 + 辉光 */
+/* Homepage brand icon with rounded glass edges and glow. */
 .omnix-hero-icon {
   width: 104px;
   height: 104px;
@@ -167,9 +151,7 @@ h1.hx-bg-clip-text.hx-bg-gradient-to-r,
   50%      { transform: translateY(-8px); }
 }
 
-/* ---------------------------------------------------------------------------
- * 4. 玻璃卡片（hextra-card / hextra-feature-card）
- * ------------------------------------------------------------------------- */
+/* 4. Glass cards: hextra-card and hextra-feature-card. */
 .hextra-card,
 .hextra-feature-card {
   position: relative;
@@ -187,7 +169,7 @@ h1.hx-bg-clip-text.hx-bg-gradient-to-r,
   transform: translateZ(0);
 }
 
-/* 卡片头部内高光（3D 玻璃质感） */
+/* Inner highlight at the top of each card adds glass depth. */
 .hextra-card::before,
 .hextra-feature-card::before {
   content: "";
@@ -202,7 +184,7 @@ h1.hx-bg-clip-text.hx-bg-gradient-to-r,
   z-index: 1;
 }
 
-/* hover：抬升 + 品牌辉光 + 青色描边 */
+/* Hover lift with brand glow and a cyan outline. */
 .hextra-card:hover,
 .hextra-feature-card:hover {
   transform: translateY(-5px) translateZ(0);
@@ -215,7 +197,7 @@ h1.hx-bg-clip-text.hx-bg-gradient-to-r,
     0 0 32px rgba(var(--omnix-brand-rgb), 0.22);
 }
 
-/* 卡片标题 / 副标题配色 */
+/* Card title and subtitle colors. */
 .hextra-card-icon {
   color: var(--omnix-text) !important;
 }
@@ -227,7 +209,7 @@ h1.hx-bg-clip-text.hx-bg-gradient-to-r,
   color: var(--omnix-text-secondary) !important;
 }
 
-/* 特性卡片（feature-card）：首行标题 */
+/* Feature-card heading. */
 .hextra-feature-card h3 {
   color: var(--omnix-text);
 }
@@ -235,9 +217,7 @@ h1.hx-bg-clip-text.hx-bg-gradient-to-r,
   color: var(--omnix-brand);
 }
 
-/* ---------------------------------------------------------------------------
- * 5. 表格：玻璃质感 + hover 行
- * ------------------------------------------------------------------------- */
+/* 5. Glass tables with highlighted rows on hover. */
 table {
   border-collapse: separate;
   border-spacing: 0;
@@ -274,10 +254,8 @@ table tbody tr:last-child td {
   border-bottom: none;
 }
 
-/* ---------------------------------------------------------------------------
- * 6. 代码块 / 行内代码：暗色玻璃 + 品牌点缀
- * ------------------------------------------------------------------------- */
-/* 行内代码 */
+/* 6. Dark glass code blocks and inline code with brand accents. */
+/* Inline code. */
 code:not(pre code) {
   background: rgba(var(--omnix-brand-rgb), 0.14) !important;
   border: 1px solid rgba(var(--omnix-brand-rgb), 0.22);
@@ -287,7 +265,7 @@ code:not(pre code) {
   font-family: var(--omnix-font-mono);
 }
 
-/* 代码块 */
+/* Code blocks. */
 pre {
   background: #0a0e18 !important;
   border: 1px solid rgba(255, 255, 255, 0.08);
@@ -298,10 +276,8 @@ pre code {
   font-family: var(--omnix-font-mono);
 }
 
-/* ---------------------------------------------------------------------------
- * 7. 链接 / 按钮
- * ------------------------------------------------------------------------- */
-/* 正文链接：品牌蓝 + 下划线滑入动画 */
+/* 7. Links and buttons. */
+/* Body links use brand blue and an animated underline. */
 .prose a:not(.not-prose),
 main a:not(.not-prose) {
   color: #7ea2ff !important;
@@ -318,7 +294,7 @@ main a:not(.not-prose):hover {
   background-size: 100% 1px;
 }
 
-/* 主题 / 语言切换等小按钮 hover */
+/* Hover styling for small theme and language controls. */
 button:hover,
 .language-switcher:hover,
 .theme-toggle:hover {
@@ -326,9 +302,7 @@ button:hover,
   background: rgba(var(--omnix-brand-rgb), 0.12) !important;
 }
 
-/* ---------------------------------------------------------------------------
- * 8. 侧边栏：玻璃 + 激活项辉光
- * ------------------------------------------------------------------------- */
+/* 8. Glass sidebar with glowing active items. */
 .sidebar-container {
   background: rgba(13, 17, 28, 0.5);
   backdrop-filter: blur(14px);
@@ -336,7 +310,7 @@ button:hover,
   border-right: 1px solid rgba(255, 255, 255, 0.05);
 }
 
-/* 侧边栏激活项 */
+/* Active sidebar item. */
 .sidebar-active-item,
 a[class*="sidebar-active"] {
   background: rgba(var(--omnix-brand-rgb), 0.16) !important;
@@ -345,30 +319,26 @@ a[class*="sidebar-active"] {
   box-shadow: 0 0 16px rgba(var(--omnix-brand-rgb), 0.14);
 }
 
-/* 侧边栏普通项 hover */
+/* Sidebar item hover. */
 .sidebar-container a:hover {
   color: var(--omnix-cyan) !important;
   background: rgba(255, 255, 255, 0.06) !important;
 }
 
-/* ---------------------------------------------------------------------------
- * 9. 页脚
- * ------------------------------------------------------------------------- */
+/* 9. Footer. */
 .hextra-footer {
   background: rgba(9, 12, 20, 0.6) !important;
   border-top: 1px solid rgba(255, 255, 255, 0.06);
-  /* 不设置 backdrop-filter，避免作为微信悬浮卡片的 containing block 破坏 fixed 定位 */
+  /* Avoid backdrop-filter: it creates a containing block that breaks the fixed WeChat card. */
 }
 .hextra-footer .hx-text-gray-600,
 .hextra-footer .hx-text-xs {
   color: var(--omnix-text-dim) !important;
 }
 
-/* ---------------------------------------------------------------------------
- * 10. 交互动画：进场 / 呼吸 / 旋转描边
- * ------------------------------------------------------------------------- */
+/* 10. Entrance, pulse, and rotating-border animations. */
 
-/* 首页 hero 内容淡入上移 */
+/* Fade and lift the homepage hero into view. */
 .hextra-home .hx-flex.hx-flex-col.hx-items-start > * {
   animation: omnix-rise 0.6s cubic-bezier(0.22, 1, 0.36, 1) both;
 }
@@ -380,7 +350,7 @@ a[class*="sidebar-active"] {
   to   { opacity: 1; transform: translateY(0); }
 }
 
-/* 主 CTA 按钮：品牌渐变 + 悬浮扫光 */
+/* Primary CTA with a brand gradient and a hover sweep. */
 a.not-prose.hx-bg-primary-600 {
   position: relative;
   overflow: hidden;
@@ -393,7 +363,7 @@ a.not-prose.hx-bg-primary-600:hover {
   transform: translateY(-2px);
   box-shadow: 0 16px 40px rgba(var(--omnix-brand-rgb), 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.25);
 }
-/* 扫光动画 */
+/* Light sweep animation. */
 a.not-prose.hx-bg-primary-600::after {
   content: "";
   position: absolute;
@@ -409,7 +379,7 @@ a.not-prose.hx-bg-primary-600:hover::after {
   left: 130%;
 }
 
-/* 特性卡片：呼吸辉光（玻璃拟态中的「明媚」点缀） */
+/* Pulsing feature-card glow adds a bright accent to the glass theme. */
 .hextra-feature-card::after {
   content: "";
   position: absolute;
@@ -424,7 +394,7 @@ a.not-prose.hx-bg-primary-600:hover::after {
   opacity: 1;
 }
 
-/* 页面标题轻微渐变（文档页 h1，内容容器为 .content 而非 .prose） */
+/* Subtle page-title gradient; document h1 elements live in .content, not .prose. */
 .prose h1,
 .content h1,
 main h1 {
@@ -436,7 +406,7 @@ main h1 {
   filter: drop-shadow(0 1px 6px rgba(var(--omnix-violet-rgb), 0.18));
 }
 
-/* 正文标题统一提亮，确保与深色背景有足够对比度 */
+/* Brighten body headings for sufficient contrast against the dark background. */
 .prose h2,
 .content h2,
 main h2 {
@@ -459,7 +429,7 @@ main li {
   color: #d6dcf2;
 }
 
-/* 滚动条美化 */
+/* Scrollbar styling. */
 ::-webkit-scrollbar {
   width: 10px;
   height: 10px;
@@ -476,18 +446,16 @@ main li {
   border: 2px solid transparent;
 }
 
-/* 移动端：避免固定背景导致滚动卡顿 */
+/* Avoid fixed backgrounds on mobile to reduce scroll jank. */
 @media (max-width: 768px) {
   body {
     background-attachment: scroll;
   }
 }
 
-/* ---------------------------------------------------------------------------
- * 11. 作者微信二维码：始终悬浮在页面右下角
- * ------------------------------------------------------------------------- */
+/* 11. Author's WeChat QR code fixed to the bottom-right corner. */
 .omnix-footer-wechat {
-  position: fixed;               /* 固定悬浮 */
+  position: fixed;               /* Fixed floating position. */
   right: 1.25rem;
   bottom: 1.25rem;
   z-index: 40;
@@ -535,7 +503,7 @@ main li {
   color: var(--omnix-text);
 }
 .omnix-wechat-title svg {
-  color: #2eae58; /* 微信绿 */
+  color: #2eae58; /* WeChat green. */
 }
 
 .omnix-wechat-qr {
@@ -543,13 +511,13 @@ main li {
   width: 104px;
   height: 104px;
   border-radius: 10px;
-  background: #fff; /* 白底保证可扫 */
+  background: #fff; /* White background preserves QR-code readability. */
   padding: 4px;
   object-fit: contain;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
   transition: transform 0.32s cubic-bezier(0.22, 1, 0.36, 1), box-shadow 0.32s ease;
 }
-/* hover 放大二维码：放大并提亮阴影，便于扫码识别 */
+/* Enlarge the QR code and brighten its shadow on hover for easier scanning. */
 .omnix-wechat-card:hover .omnix-wechat-qr {
   transform: scale(1.8);
   box-shadow: 0 14px 40px rgba(0, 0, 0, 0.55), 0 0 30px rgba(46, 174, 88, 0.25);
@@ -562,9 +530,7 @@ main li {
   text-align: center;
 }
 
-/* ---------------------------------------------------------------------------
- * 12. 导航栏语言切换（右上角，玻璃拟态下拉）
- * ------------------------------------------------------------------------- */
+/* 12. Top-right language control with a glass dropdown. */
 .omnix-lang-switch {
   position: relative;
   margin-left: 0.25rem;
@@ -600,7 +566,7 @@ main li {
   transform: rotate(180deg);
 }
 
-/* 下拉菜单：hover 展开 */
+/* Expand the dropdown on hover. */
 .omnix-lang-dropdown {
   position: absolute;
   top: calc(100% + 0.5rem);
@@ -650,16 +616,14 @@ main li {
   font-weight: 600;
 }
 
-/* ---------------------------------------------------------------------------
- * 13. 留白优化：让页面更透气
- * ------------------------------------------------------------------------- */
-/* 首页 hero 与分区间距加大 */
+/* 13. Spacing for a more open layout. */
+/* Increase spacing around the homepage hero and sections. */
 .hextra-home .hx-mt-10 { margin-top: 3.25rem; }
 .hextra-home .hx-mb-8  { margin-bottom: 2.75rem; }
 .hextra-home .hx-mb-10 { margin-bottom: 3.75rem; }
 .hextra-home .hx-mt-8  { margin-top: 2.5rem; }
 
-/* 首页各分区标题上下留白 */
+/* Space above and below homepage section headings. */
 .hextra-home .content h2,
 .hextra-home h2 {
   margin-top: 4.5rem;
@@ -667,12 +631,12 @@ main li {
   padding-bottom: 0.6rem;
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
 }
-/* 首页首个分区标题（紧随架构图）上方留白收紧一点，避免过度空荡 */
+/* Reduce space before the first heading after the architecture diagram. */
 .hextra-home .content h2:first-of-type {
   margin-top: 3.5rem;
 }
 
-/* 首页玻璃特性卡片：同一行三列均匀分布并居中 */
+/* Center homepage feature cards in three evenly spaced columns. */
 .hextra-home .hextra-cards {
   grid-template-columns: repeat(var(--hextra-cards-grid-cols, 3), minmax(0, 1fr)) !important;
   justify-content: center;
@@ -686,19 +650,19 @@ main li {
   }
 }
 
-/* 首页正文段落行距与间距 */
+/* Homepage paragraph spacing and line height. */
 .hextra-home .content p,
 .hextra-home p {
   line-height: 1.85;
   margin-bottom: 1.1rem;
 }
 
-/* 玻璃卡片网格间距 */
+/* Glass-card grid gaps. */
 .hextra-home .hextra-card {
   margin-bottom: 1.25rem;
 }
 
-/* 内容页正文：更多内边距与行距 */
+/* Increase document padding and line height. */
 .content,
 .prose {
   line-height: 1.85;
@@ -719,17 +683,15 @@ main .content table {
   margin: 1.5rem 0;
 }
 
-/* 列表项间距 */
+/* List-item spacing. */
 main .content li {
   margin-bottom: 0.4rem;
 }
 
-/* ---------------------------------------------------------------------------
- * 14. 交互元素背景统一（全面排查修正）
- *    不依赖 .dark 类，强制玻璃深色，确保任何主题下交互元素都与页面背景一致
- * ------------------------------------------------------------------------- */
+/* 14. Consistent backgrounds for interactive elements.
+ * Apply dark glass styling independently of the .dark class in every theme. */
 
-/* 搜索框 */
+/* Search box. */
 .search-input {
   background: rgba(255, 255, 255, 0.07) !important;
   color: #e6ecff !important;
@@ -742,7 +704,7 @@ main .content li {
   box-shadow: 0 0 0 3px rgba(var(--omnix-brand-rgb), 0.12);
 }
 
-/* 搜索结果下拉 */
+/* Search results dropdown. */
 .search-results {
   background: rgba(15, 19, 32, 0.97) !important;
   border: 1px solid rgba(255, 255, 255, 0.14) !important;
@@ -756,14 +718,14 @@ main .content li {
   color: #fff !important;
 }
 
-/* 键盘快捷键提示 */
+/* Keyboard shortcut hints. */
 kbd {
   background: rgba(255, 255, 255, 0.08) !important;
   color: #c9d1ef !important;
   border: 1px solid rgba(255, 255, 255, 0.14) !important;
 }
 
-/* 语言切换下拉（侧边栏/页脚） */
+/* Sidebar and footer language dropdowns. */
 .language-options {
   background: rgba(15, 19, 32, 0.97) !important;
   border: 1px solid rgba(255, 255, 255, 0.14) !important;
@@ -777,7 +739,7 @@ kbd {
   color: #fff !important;
 }
 
-/* 底部语言 / 主题切换按钮 */
+/* Bottom language and theme controls. */
 .language-switcher,
 .theme-toggle {
   color: #c9d1ef !important;
@@ -788,7 +750,7 @@ kbd {
   color: #fff !important;
 }
 
-/* 侧边栏 / 目录底部固定条（原 hx-bg-white，改玻璃深色） */
+/* Fixed sidebar and TOC footer bars: replace hx-bg-white with dark glass. */
 div[class*="hx-sticky"][class*="hx-bottom-0"] {
   background: rgba(13, 17, 28, 0.88) !important;
   border-top: 1px solid rgba(255, 255, 255, 0.08) !important;
@@ -797,12 +759,12 @@ div[class*="hx-sticky"][class*="hx-bottom-0"] {
   -webkit-backdrop-filter: blur(14px);
 }
 
-/* 汉堡菜单 hover */
+/* Hamburger-menu hover. */
 .hamburger-menu:hover {
   background: rgba(255, 255, 255, 0.08) !important;
 }
 
-/* 目录（TOC）面板 */
+/* Table-of-contents panel. */
 .hextra-toc,
 aside[class*="toc"] {
   background: rgba(13, 17, 28, 0.4);
@@ -819,7 +781,7 @@ aside[class*="toc"] a:hover {
   color: var(--omnix-cyan) !important;
 }
 
-/* 提示框 / callout：统一玻璃深色底（保留语义色描边与文字） */
+/* Dark glass callouts retain their semantic border and text colors. */
 div[class*="hx-overflow-x-auto"][class*="hx-rounded-lg"][class*="hx-border"] {
   background: rgba(255, 255, 255, 0.05) !important;
   border-color: rgba(255, 255, 255, 0.14) !important;
@@ -827,13 +789,13 @@ div[class*="hx-overflow-x-auto"][class*="hx-rounded-lg"][class*="hx-border"] {
   -webkit-backdrop-filter: blur(12px);
 }
 
-/* 徽章 */
+/* Badges. */
 .hextra-badge > div {
   backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);
 }
 
-/* 分页 / pager */
+/* Pagination. */
 a[class*="hextra-pager"],
 [class*="pager"] a {
   background: rgba(255, 255, 255, 0.04) !important;
@@ -845,7 +807,7 @@ a[class*="hextra-pager"],
   border-color: rgba(var(--omnix-brand-rgb), 0.4) !important;
 }
 
-/* 代码复制按钮 */
+/* Copy-code button. */
 [class*="code-copy"] {
   background: rgba(255, 255, 255, 0.06) !important;
   color: #c9d1ef !important;
@@ -856,7 +818,7 @@ a[class*="hextra-pager"],
   color: #fff !important;
 }
 
-/* 面包屑 */
+/* Breadcrumbs. */
 [class*="breadcrumb"] a {
   color: #9aa3c7 !important;
 }
@@ -864,7 +826,7 @@ a[class*="hextra-pager"],
   color: var(--omnix-cyan) !important;
 }
 
-/* 分页/上一页下一页大按钮、Tabs 激活态也统一深色 */
+/* Dark styling for previous/next buttons and active tabs. */
 .tab-active,
 [class*="tab-active"] {
   background: rgba(var(--omnix-brand-rgb), 0.16) !important;
@@ -872,9 +834,7 @@ a[class*="hextra-pager"],
   border-bottom-color: var(--omnix-pink) !important;
 }
 
-/* ---------------------------------------------------------------------------
- * 15. 页脚底部 DeepSeek Harness 官方引用
- * ------------------------------------------------------------------------- */
+/* 15. Official DeepSeek Harness references at the bottom of the footer. */
 .omnix-footer-refs {
   display: flex;
   flex-wrap: wrap;
@@ -894,9 +854,7 @@ a[class*="hextra-pager"],
   text-decoration: underline;
 }
 
-/* ---------------------------------------------------------------------------
- * 16. 导航栏主题切换按钮（右上角，玻璃胶囊，与语言切换统一）
- * ------------------------------------------------------------------------- */
+/* 16. Top-right theme toggle styled as a glass pill to match the language control. */
 nav .theme-toggle {
   display: inline-flex;
   align-items: center;
@@ -923,12 +881,10 @@ nav .theme-toggle svg {
   margin: 0;
 }
 
-/* ---------------------------------------------------------------------------
- * 17. 背景波浪缓慢动效 + 颜色混搭加深
- *    （在 body 的固定背景之上叠加两层缓慢流动的径向光晕）
- * ------------------------------------------------------------------------- */
+/* 17. Slow background waves and deeper color blending.
+ * Overlay two slowly drifting radial glows on the fixed body background. */
 body {
-  /* 加深混搭：提高各辉光色不透明度与尺寸 */
+  /* Deepen the color blend by increasing glow opacity and size. */
   background-image:
     linear-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px),
     linear-gradient(90deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px),
@@ -940,7 +896,7 @@ body {
   background-attachment: fixed;
 }
 
-/* 波浪动效层：缓慢上下漂浮的双层光晕 */
+/* Two slowly drifting glow layers. */
 body::before {
   content: "";
   position: fixed;
@@ -973,17 +929,15 @@ body::after {
   100% { transform: translate3d(-3%, 2%, 0) scale(1.02); }
 }
 
-/* ---------------------------------------------------------------------------
- * 18. 表格：彻底统一为玻璃深色（修复白色突兀背景）
- *     强制 width:100% 填满容器避免右侧空白；提亮文字对比度
- * ------------------------------------------------------------------------- */
+/* 18. Consistent dark glass tables without white backgrounds.
+ * Fill the container with width:100% and improve text contrast. */
 table {
   width: 100% !important;
   table-layout: auto;
   background: rgba(255, 255, 255, 0.04) !important;
   border: 1px solid rgba(255, 255, 255, 0.12) !important;
 }
-/* 首页表格：居中显示、填满容器、不留右侧空白 */
+/* Center homepage tables and fill their containers without a right-hand gap. */
 .hextra-home table {
   width: 100% !important;
   display: table;
@@ -1000,12 +954,12 @@ table td,
 table th {
   border-bottom: 1px solid rgba(255, 255, 255, 0.07) !important;
   color: #d6dcf2 !important;
-  border-color: rgba(255, 255, 255, 0.10) !important; /* 覆盖 Hextra 斑马纹/边框 */
+  border-color: rgba(255, 255, 255, 0.10) !important; /* Override Hextra zebra striping and borders. */
 }
 table tbody td {
   color: #d6dcf2 !important;
 }
-/* 覆盖 Hextra 偶数行浅灰斑马纹（even:bg-gray-100），强制深色玻璃 */
+/* Replace Hextra's even:bg-gray-100 stripes with dark glass. */
 table tr,
 table tbody tr,
 table tr:nth-child(even),
@@ -1016,27 +970,25 @@ table td strong,
 table th strong {
   color: #ffffff !important;
 }
-/* 表格内链接提亮 */
+/* Brighten links in tables. */
 table td a,
 table th a {
   color: #8fb0ff !important;
   font-weight: 500;
 }
-/* 兼容 Hextra 可能给表格加的暗色透明类 */
+/* Support Hextra's optional dark transparent table classes. */
 table[class*="bg-white"],
 table[class*="bg-gray"],
 table[class*="bg-neutral"] {
   background: rgba(255, 255, 255, 0.04) !important;
 }
 
-/* ---------------------------------------------------------------------------
- * 19. 首页架构图：玻璃节点 + 数据流动画
- * ------------------------------------------------------------------------- */
+/* 19. Homepage architecture diagram with glass nodes and animated data flow. */
 .omnix-arch {
   margin: 2.5rem auto;
   padding: 1.5rem;
-  width: 100%;               /* 撑满 flex 容器（父级 content 是 items-start），避免收缩到内容宽度 */
-  max-width: 1000px;               /* 限制最大宽度，居中展示 */
+  width: 100%;               /* Fill the flex container; its parent uses items-start, which otherwise shrinks the diagram. */
+  max-width: 1000px;               /* Constrain maximum width and center the diagram. */
   text-align: center;
   border-radius: 18px;
   background:
@@ -1049,7 +1001,7 @@ table[class*="bg-neutral"] {
     0 24px 60px rgba(0, 0, 0, 0.45);
 }
 
-/* 架构图主体：占满容器宽度并居中 */
+/* Center the diagram and fill the available width. */
 .omnix-arch-svg {
   width: 100%;
   max-width: 960px;
@@ -1058,7 +1010,7 @@ table[class*="bg-neutral"] {
   margin: 0 auto;
 }
 
-/* 数据流沿线流动的小圆点 */
+/* Small dots animate along the data-flow paths. */
 .omnix-flow {
   animation: omnix-dash 2.6s linear infinite;
 }
@@ -1071,7 +1023,7 @@ table[class*="bg-neutral"] {
   100% { offset-distance: 100%; }
 }
 
-/* 节点呼吸辉光 */
+/* Pulsing node glow. */
 .omnix-node {
   animation: omnix-node-glow 3.5s ease-in-out infinite;
 }

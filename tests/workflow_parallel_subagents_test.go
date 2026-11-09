@@ -1,7 +1,5 @@
-// 本文件验证任务 S12：Workflow Engine（pipeline/parallel/agent 脚本全局 + 子代理编排）。
-//
-// 覆盖：并行 3 个子代理、每个跑 2 步 → 汇总结果正确且保序；串行短路；
-// workflow 取消 → 子步骤级联取消（Cancelled 标志）。
+// S12 workflow tests cover three parallel two-step subagents with ordered aggregation, sequential
+// short-circuiting, and cascading cancellation marked by Cancelled.
 package tests
 
 import (
@@ -13,7 +11,7 @@ import (
 	"github.com/herlanai/omnix/pkg/workflow"
 )
 
-// spawnStub 是集成 S02 subagent 的 SpawnAgentFunc 桩：返回 "agent:<input>:done"。
+// spawnStub integrates an S02 subagent and returns agent:<input>:done.
 func spawnStub(ctx context.Context, backend, input string) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
@@ -21,9 +19,9 @@ func spawnStub(ctx context.Context, backend, input string) (string, error) {
 	return "agent:" + backend + ":" + input + ":done", nil
 }
 
-// TestWorkflowParallel3Subagents 验证并行 3 个子代理、每个 2 步 → 汇总正确。
+// TestWorkflowParallel3Subagents aggregates three parallel subagents with two steps each.
 func TestWorkflowParallel3Subagents(t *testing.T) {
-	// 每个子代理 = 串行 2 步（Agent 步骤）。
+	// Each subagent runs two Agent steps sequentially.
 	subA := workflow.Pipeline("subA",
 		workflow.Agent("a1", "in-process", "A-1", spawnStub),
 		workflow.Agent("a2", "in-process", "A-2", spawnStub),
@@ -37,7 +35,7 @@ func TestWorkflowParallel3Subagents(t *testing.T) {
 		workflow.Agent("c2", "in-process", "C-2", spawnStub),
 	)
 
-	// 元工作流：并行 3 个子代理。
+	// The outer workflow runs three subagents in parallel.
 	meta := workflow.Parallel("meta", workflow.Seq(subA), workflow.Seq(subB), workflow.Seq(subC))
 
 	res, err := meta.Run(context.Background())
@@ -50,7 +48,7 @@ func TestWorkflowParallel3Subagents(t *testing.T) {
 	if len(res.Outputs) != 3 {
 		t.Fatalf("应有 3 个子代理输出，实际 %d", len(res.Outputs))
 	}
-	// 每个子代理输出应含 2 步结果。
+	// Each subagent output must contain both step results.
 	full := strings.Join(res.Outputs, ";")
 	if !strings.Contains(full, "A-1:done") || !strings.Contains(full, "A-2:done") ||
 		!strings.Contains(full, "B-1:done") || !strings.Contains(full, "B-2:done") ||
@@ -59,7 +57,7 @@ func TestWorkflowParallel3Subagents(t *testing.T) {
 	}
 }
 
-// TestWorkflowPipelineShortCircuit 验证串行单步失败短路。
+// TestWorkflowPipelineShortCircuit stops after a failing sequential step.
 func TestWorkflowPipelineShortCircuit(t *testing.T) {
 	runCount := 0
 	bad := workflow.Pipeline("bad",
@@ -74,18 +72,18 @@ func TestWorkflowPipelineShortCircuit(t *testing.T) {
 	if runCount != 0 {
 		t.Fatalf("短路后不应执行后续步骤，实际执行 %d 次", runCount)
 	}
-	// 只输出前两步（ok 与 boom:error）。
+	// Return only the first two outputs: ok and boom:error.
 	if len(res.Outputs) != 2 {
 		t.Fatalf("输出应为 2 条(ok + error)，实际 %d", len(res.Outputs))
 	}
 }
 
-// TestWorkflowCancel 验证取消会级联结束子步骤（Cancelled 标志）。
+// TestWorkflowCancel cascades cancellation into child steps and sets Cancelled.
 func TestWorkflowCancel(t *testing.T) {
 	step := &workflow.Step{
 		Name: "blocking",
 		Run: func(ctx context.Context) (string, error) {
-			// 阻塞直到取消。
+			// Block until canceled.
 			<-ctx.Done()
 			return "", ctx.Err()
 		},
@@ -103,7 +101,7 @@ func TestWorkflowCancel(t *testing.T) {
 	}
 }
 
-// errBoom 是测试用的简易错误。
+// errBoom is a simple test error.
 type errBoom struct{}
 
 func (errBoom) Error() string { return "boom" }

@@ -1,37 +1,32 @@
-// Package telemetry 提供缓存命中率监控指标与告警协同。
-//
-// 对应任务 N09：Grafana 缓存命中率看板 + OTel 探针。
-//
-// 本实现提供 4 个"OTel 语义"的指标（HashAgg / Counter / Histogram 的轻量占位，
-// 便于无 collector 环境测试；接入真实 OTel SDK 时替换为对应 Instrument 即可）：
-//   - omnix.cache.hit_ratio      (Histogram, 按 session/preset/turn 维度)
-//   - omnix.cache.hit_tokens     (Counter)
-//   - omnix.cache.miss_tokens    (Counter)
-//   - omnix.cache.broken_count   (Counter，检测到可缓存破窗模式 +1)
+// Package telemetry provides cache-hit metrics for Grafana and OTel integration (N09). Lightweight
+// in-memory instruments support testing without a collector and can be replaced with OTel SDK
+// instruments. Metrics are omnix.cache.hit_ratio (histogram by session/preset/turn),
+// omnix.cache.hit_tokens, omnix.cache.miss_tokens, and omnix.cache.broken_count (incremented for
+// detected cache-breaking patterns).
 package telemetry
 
 import "sync"
 
-// CacheMetrics 是缓存命中率指标聚合器。
+// CacheMetrics aggregates cache-hit metrics.
 type CacheMetrics struct {
-	mu             sync.Mutex
-	HitRatios      []float64 // 命中率历史（Histogram 样本）
-	HitTokensTotal int64
+	mu              sync.Mutex
+	HitRatios       []float64 // Cache-hit ratio samples for the histogram.
+	HitTokensTotal  int64
 	MissTokensTotal int64
-	BrokenCount    int64
+	BrokenCount     int64
 
-	// Session 维度标签（当前局）。
+	// Session label for the current aggregation.
 	SessionID string
 	Preset    string
 	TurnSeq   int
 }
 
-// NewCacheMetrics 创建指标聚合器。
+// NewCacheMetrics creates a metrics aggregator.
 func NewCacheMetrics() *CacheMetrics {
 	return &CacheMetrics{}
 }
 
-// Record 记录一次请求的缓存指标。
+// Record records cache metrics for one request.
 func (m *CacheMetrics) Record(hit, miss int, ratio float64) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -40,14 +35,14 @@ func (m *CacheMetrics) Record(hit, miss int, ratio float64) {
 	m.MissTokensTotal += int64(miss)
 }
 
-// MarkBroken 标记一次破窗事件（broken_count +1）。
+// MarkBroken increments the cache-breaking event counter.
 func (m *CacheMetrics) MarkBroken() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.BrokenCount++
 }
 
-// HistogramP50 计算命中率样本的 P50（分位数），用于 Grafana 告警规则 hit_ratio_p50。
+// HistogramP50 returns the median cache-hit ratio for the hit_ratio_p50 Grafana alert.
 func (m *CacheMetrics) HistogramP50() float64 {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -55,7 +50,7 @@ func (m *CacheMetrics) HistogramP50() float64 {
 		return 0
 	}
 	sorted := append([]float64(nil), m.HitRatios...)
-	// 简单插入排序。
+	// Sort samples using insertion sort.
 	for i := 1; i < len(sorted); i++ {
 		for j := i; j > 0 && sorted[j-1] > sorted[j]; j-- {
 			sorted[j-1], sorted[j] = sorted[j], sorted[j-1]
@@ -65,7 +60,7 @@ func (m *CacheMetrics) HistogramP50() float64 {
 	return sorted[idx]
 }
 
-// MetricsNames 返回本实现导出的 4 个指标名（供 OTel 对接/看板引用）。
+// MetricsNames returns the four exported metric names for OTel and dashboard integration.
 func MetricsNames() []string {
 	return []string{
 		"omnix.cache.hit_ratio",

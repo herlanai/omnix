@@ -1,4 +1,4 @@
-// Package tests 的 launchenv 分层环境验收测试。
+// Layered launch-environment tests.
 package tests
 
 import (
@@ -30,7 +30,7 @@ func TestLaunchEnvGetFrom(t *testing.T) {
 		{Source: launchenv.SourceProcess, Values: map[string]string{"K": "proc"}},
 		{Source: launchenv.SourceUserEnv, Values: map[string]string{"K": "user"}},
 	})
-	// 只允许 user 层，应拿到 user。
+	// When only the user layer is allowed, return its value.
 	if e, ok := s.GetFrom("K", []launchenv.Source{launchenv.SourceUserEnv}); !ok || e.Value != "user" {
 		t.Fatalf("getFrom = %+v ok=%v", e, ok)
 	}

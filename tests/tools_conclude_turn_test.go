@@ -1,4 +1,4 @@
-// 本文件对应任务 M25：ToolRunContext deferContext + concludeTurn。
+// M25 ToolRunContext deferred callbacks and turn conclusion tests.
 package tests
 
 import (
@@ -7,12 +7,12 @@ import (
 	"github.com/herlanai/omnix/pkg/tools"
 )
 
-// TestToolsConcludeTurn 验证 report_blocker 调用 concludeTurn 后 turn 标记为结束。
+// TestToolsConcludeTurn marks the turn ended when report_blocker concludes it.
 func TestToolsConcludeTurn(t *testing.T) {
 	concluded := ""
 	tc := tools.NewToolRunContext(func(reason string) { concluded = reason })
 
-	// 模拟 goal_report_blocker 调用
+	// Simulate goal_report_blocker.
 	if !tc.ConcludeTurn("goal-blocker") {
 		t.Fatal("首次 conclude 应返回 true")
 	}
@@ -23,13 +23,13 @@ func TestToolsConcludeTurn(t *testing.T) {
 		t.Fatal("conclude 后 IsConcluded 应为 true")
 	}
 
-	// 再次调用不应重复触发
+	// Repeated calls must not trigger conclusion again.
 	if tc.ConcludeTurn("again") {
 		t.Fatal("重复 conclude 应返回 false")
 	}
 }
 
-// TestToolsDeferContext 验证 deferred 回调按 LIFO 在 conclude 时执行。
+// TestToolsDeferContext executes deferred callbacks in LIFO order on conclusion.
 func TestToolsDeferContext(t *testing.T) {
 	var order []string
 	tc := tools.NewToolRunContext(nil)
@@ -38,13 +38,13 @@ func TestToolsDeferContext(t *testing.T) {
 	tc.DeferContext(func() { order = append(order, "d2") })
 
 	_ = tc.ConcludeTurn("cleanup")
-	// LIFO：d2 先执行
+	// LIFO order executes d2 first.
 	if len(order) != 2 || order[0] != "d2" || order[1] != "d1" {
 		t.Fatalf("deferred 应按 LIFO 执行: %v", order)
 	}
 }
 
-// TestToolsRunContextMeta 验证运行元数据读写。
+// TestToolsRunContextMeta verifies runtime metadata access.
 func TestToolsRunContextMeta(t *testing.T) {
 	tc := tools.NewToolRunContext(nil)
 	tc.SetMeta("started_ms", 100)
@@ -53,7 +53,7 @@ func TestToolsRunContextMeta(t *testing.T) {
 	}
 }
 
-// TestToolsConcludeContextPropagation 验证 conclude 回调经 context 传播。
+// TestToolsConcludeContextPropagation propagates the conclude callback through context.
 func TestToolsConcludeContextPropagation(t *testing.T) {
 	called := false
 	tc := tools.NewToolRunContext(func(string) { called = true })

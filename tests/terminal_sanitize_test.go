@@ -1,4 +1,4 @@
-// Package tests 的终端转义清洗验收测试。
+// Terminal escape-sequence sanitization tests.
 package tests
 
 import (
@@ -15,11 +15,11 @@ func TestStripANSICSI(t *testing.T) {
 }
 
 func TestStripANSIOSC(t *testing.T) {
-	// BEL 结束。
+	// Terminate with BEL.
 	if got := terminal.StripANSI("\x1b]0;title\x07out"); got != "out" {
 		t.Fatalf("osc bel = %q", got)
 	}
-	// ST 结束。
+	// Terminate with ST.
 	if got := terminal.StripANSI("\x1b]0;title\x1b\\out"); got != "out" {
 		t.Fatalf("osc st = %q", got)
 	}

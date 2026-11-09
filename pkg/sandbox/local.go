@@ -1,14 +1,9 @@
-// 本文件实现本地后端多探测链 + LocalProvider。
-//
-// 对齐官方：packages/sandbox/sandbox-local/src/index.ts
-//
-// 设计要点：
-//   - 平台检测：Linux 链 bwrap → landlock，macOS 链 seatbelt，Windows 链 windows-acl；
-//   - 功能探测：用 read-only profile + true 命令实际运行，成功则后端可用；
-//   - 探测结果缓存：进程级单例，只探测一次；
-//   - LocalProvider 实现 SandboxProvider 接口：Confine() 根据后端类型组装完整 argv；
-//   - 后端特定 denialSignatures：bwrap EROFS、landlock EACCES、seatbelt EPERM；
-//   - Config 支持 runnerCommand 覆盖（跳过探测，直接使用指定 runner）。
+// LocalProvider follows upstream sandbox-local. Backend probing tries bwrap
+// then landlock on Linux, seatbelt on macOS, and windows-acl on Windows.
+// It runs a read-only profile with a true command and caches probe results.
+// Confine builds backend-specific arguments and denial signatures: EROFS for
+// bwrap, EACCES for landlock, and EPERM for seatbelt. RunnerCommand overrides
+// skip probing and use the configured runner directly.
 package sandbox
 
 import (
@@ -17,42 +12,41 @@ import (
 	"sync"
 )
 
-// BackendType 是本地沙箱后端类型。
+// BackendType identifies a local sandbox backend.
 type BackendType string
 
 const (
-	// BackendBwrap 是 Linux Bubblewrap 后端。
+	// BackendBwrap selects Linux Bubblewrap.
 	BackendBwrap BackendType = "bwrap"
-	// BackendLandlock 是 Linux Landlock 后端。
+	// BackendLandlock selects Linux Landlock.
 	BackendLandlock BackendType = "landlock"
-	// BackendSeatbelt 是 macOS Seatbelt 后端。
+	// BackendSeatbelt selects macOS Seatbelt.
 	BackendSeatbelt BackendType = "seatbelt"
-	// BackendWindowsACL 是 Windows ACL 后端。
+	// BackendWindowsACL selects Windows ACL confinement.
 	BackendWindowsACL BackendType = "windows-acl"
-	// BackendUnavailable 表示没有可用的本地后端。
+	// BackendUnavailable indicates no usable local backend.
 	BackendUnavailable BackendType = "unavailable"
 )
 
-// LocalConfig 是 LocalProvider 的配置。
+// LocalConfig configures LocalProvider.
 type LocalConfig struct {
-	// RunnerCommand 覆盖自动探测的 runner 命令（如 "bwrap"、"sandbox-exec"）。
-	// 非空时跳过探测，直接使用此命令。
+	// RunnerCommand overrides detection, for example bwrap or sandbox-exec.
+	// A nonempty command is used directly without probing.
 	RunnerCommand string
-	// BackendType 强制指定后端类型（配合 RunnerCommand 使用）。
+	// BackendType selects the backend explicitly with RunnerCommand.
 	BackendType BackendType
 }
 
-// LocalProvider 是本地沙箱提供者，实现 SandboxProvider 接口。
-// 通过多后端探测链选择当前平台可用的最强后端。
+// LocalProvider implements SandboxProvider by probing supported backends
+// for the current platform.
 type LocalProvider struct {
-	config LocalConfig
-	once   sync.Once
+	config  LocalConfig
+	once    sync.Once
 	backend BackendType
 	runner  string
 }
 
-// NewLocalProvider 创建本地沙箱提供者。
-// config 为 nil 时使用默认配置（自动探测）。
+// NewLocalProvider creates a local provider; nil config enables automatic detection.
 func NewLocalProvider(config *LocalConfig) *LocalProvider {
 	p := &LocalProvider{}
 	if config != nil {
@@ -61,20 +55,20 @@ func NewLocalProvider(config *LocalConfig) *LocalProvider {
 	return p
 }
 
-// detectBackend 执行多后端探测链，返回可用的后端类型和 runner 命令。
-// 探测结果缓存（进程级单例）。
+// detectBackend probes the backend chain and returns the backend and runner.
+// Probe results are cached.
 func (p *LocalProvider) detectBackend() (BackendType, string) {
 	p.once.Do(func() {
-		// 如果配置了强制后端，直接使用
+		// Use an explicitly configured backend directly.
 		if p.config.RunnerCommand != "" && p.config.BackendType != "" {
 			p.backend = p.config.BackendType
 			p.runner = p.config.RunnerCommand
 			return
 		}
-		// 按平台探测
+		// Probe according to platform.
 		switch runtime.GOOS {
 		case "linux":
-			// Linux 链：bwrap → landlock
+			// Linux probes bwrap before landlock.
 			if p.tryBwrap() {
 				p.backend = BackendBwrap
 				p.runner = "bwrap"
@@ -86,14 +80,14 @@ func (p *LocalProvider) detectBackend() (BackendType, string) {
 				return
 			}
 		case "darwin":
-			// macOS 链：seatbelt
+			// macOS probes seatbelt.
 			if p.trySeatbelt() {
 				p.backend = BackendSeatbelt
 				p.runner = "sandbox-exec"
 				return
 			}
 		case "windows":
-			// Windows 链：windows-acl（通过受限令牌实现）
+			// Windows selects windows-acl with token-based execution.
 			p.backend = BackendWindowsACL
 			p.runner = "windows-acl"
 			return
@@ -104,13 +98,13 @@ func (p *LocalProvider) detectBackend() (BackendType, string) {
 	return p.backend, p.runner
 }
 
-// tryBwrap 探测 bwrap 是否可用：用 read-only profile 运行 true 命令。
+// tryBwrap probes a read-only profile by running true.
 func (p *LocalProvider) tryBwrap() bool {
 	_, err := exec.LookPath("bwrap")
 	if err != nil {
 		return false
 	}
-	// 用 read-only profile 运行 true，成功则可用
+	// A successful read-only true invocation indicates availability.
 	cmd := exec.Command("bwrap",
 		"--ro-bind", "/", "/",
 		"--dev", "/dev",
@@ -122,19 +116,19 @@ func (p *LocalProvider) tryBwrap() bool {
 	return cmd.Run() == nil
 }
 
-// tryLandlock 探测 landlock-launcher 是否可用。
+// tryLandlock probes landlock-launcher availability.
 func (p *LocalProvider) tryLandlock() bool {
 	_, err := exec.LookPath("landlock-launcher")
 	return err == nil
 }
 
-// trySeatbelt 探测 macOS sandbox-exec 是否可用。
+// trySeatbelt probes macOS sandbox-exec availability.
 func (p *LocalProvider) trySeatbelt() bool {
 	_, err := exec.LookPath("sandbox-exec")
 	if err != nil {
 		return false
 	}
-	// 用基础 SBPL 运行 true
+	// Run true with a basic SBPL profile.
 	cmd := exec.Command("sandbox-exec", "-p",
 		"(version 1)(allow default)(deny file-write*)(allow file-write* (literal \"/dev/null\"))",
 		"true",
@@ -142,41 +136,41 @@ func (p *LocalProvider) trySeatbelt() bool {
 	return cmd.Run() == nil
 }
 
-// Backend 返回当前探测到的后端类型。
+// Backend returns the detected backend type.
 func (p *LocalProvider) Backend() BackendType {
 	b, _ := p.detectBackend()
 	return b
 }
 
-// Runner 返回当前探测到的 runner 命令。
+// Runner returns the detected runner command.
 func (p *LocalProvider) Runner() string {
 	_, r := p.detectBackend()
 	return r
 }
 
-// Available 检查本地沙箱是否可用。
+// Available reports whether a local sandbox backend is available.
 func (p *LocalProvider) Available() bool {
 	b, _ := p.detectBackend()
 	return b != BackendUnavailable
 }
 
-// Confine 实现 SandboxProvider 接口：根据后端类型组装受约束的 argv。
+// Confine implements SandboxProvider by building backend-specific command arguments.
 func (p *LocalProvider) Confine(argv []string, policy SandboxPolicy) (ConfinedArgv, error) {
 	backend, runner := p.detectBackend()
 	if backend == BackendUnavailable {
 		return ConfinedArgv{}, &SandboxUnavailableError{Msg: "no local sandbox backend available on this platform"}
 	}
-	// Windows ACL 后端不通过 runner 命令，而是通过受限令牌（在 windows_acl.go 中处理）
+	// Windows ACL uses token-based execution rather than a runner command; see windows_acl.go.
 	if backend == BackendWindowsACL {
-		// 对于 Windows ACL，argv 保持不变，enforcement 为 full
-		// 实际的令牌创建在执行层处理
+		// Keep argv unchanged for Windows ACL; token creation belongs to the execution
+		// layer. This path reports full enforcement.
 		return ConfinedArgv{
-			Argv:        argv,
-			Enforcement: EnforcementFull,
+			Argv:             argv,
+			Enforcement:      EnforcementFull,
 			DenialSignatures: p.DenialSignatures(),
 		}, nil
 	}
-	// 组装 profile 参数
+	// Build profile arguments.
 	var profileArgs []string
 	switch backend {
 	case BackendBwrap:
@@ -186,19 +180,19 @@ func (p *LocalProvider) Confine(argv []string, policy SandboxPolicy) (ConfinedAr
 	case BackendSeatbelt:
 		profileArgs = SeatbeltProfileArgs(policy)
 	}
-	// 完整 argv：runner + profileArgs + -- + argv
+	// Assemble runner, profile arguments, separator, and original argv.
 	fullArgv := []string{runner}
 	fullArgv = append(fullArgv, profileArgs...)
 	fullArgv = append(fullArgv, "--")
 	fullArgv = append(fullArgv, argv...)
 	return ConfinedArgv{
-		Argv:        fullArgv,
-		Enforcement: EnforcementFull,
+		Argv:             fullArgv,
+		Enforcement:      EnforcementFull,
 		DenialSignatures: p.DenialSignatures(),
 	}, nil
 }
 
-// DenialSignatures 返回当前后端的拒绝签名（用于 RunnerFailureRule 匹配）。
+// DenialSignatures returns backend denial strings for failure matching.
 func (p *LocalProvider) DenialSignatures() []string {
 	backend, _ := p.detectBackend()
 	switch backend {

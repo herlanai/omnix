@@ -1,14 +1,7 @@
-// 本文件对应任务 H06：Tool Pipeline 对象池（ExecContext / Meta map 热路径结构用
-// sync.Pool 回收复用）。
-//
-// 设计原则：
-//   - 仅在【显式开启 pooled 模式】（Pipeline.SetPooled(true)）后生效，默认 Run 行为不变；
-//   - pool 只回收 ExecContext 及其内部的 Meta map（每次 Run 都会 new 一个 map，是最大
-//     分配热点）；
-//   - **ToolCallResult 不禁池**：Run 的返回 `*ToolCallResult` 会交由调用方持有，若从池中
-//     取出复用，下一次 Run 会改写调用方正在引用的上一次结果 → 数据竞争/语义错误。
-//     因此 pooled 模式跑完后把 Result 字段【拷贝到新对象】再返回（安全，调用方可自由持有）；
-//   - 复用安全：Get 后必做的字段清零（Result/Signal/Denied/Meta/Ctx），杜绝脏复用。
+// Opt-in tool pipeline pooling (H06) reuses ExecContext and its Meta map through sync.Pool.
+// ToolCallResult must never be reused: callers can retain it after Run returns, so later
+// mutation would cause races and corrupt earlier results. Copy the result to a fresh object
+// before returning, and reset all execution fields before reuse.
 package tools
 
 import (
@@ -16,23 +9,22 @@ import (
 	"sync"
 )
 
-// execContextPool H06：按需复用 ExecContext（含 Meta 空 map）。
+// execContextPool reuses execution contexts with empty metadata maps (H06).
 var execContextPool = sync.Pool{
 	New: func() any { return &ExecContext{Meta: map[string]any{}} },
 }
 
-// clearMeta 复用既有 map（删除全部键，保留底层 bucket，避免下次增长分配）。
+// clearMeta removes all keys while retaining map capacity for reuse.
 func clearMeta(m map[string]any) {
 	for k := range m {
 		delete(m, k)
 	}
 }
 
-// RunPooled 使用对象池路径执行一次工具调用，返回结果。
-// 语义与 Run 完全一致，仅内部复用 ExecContext / Meta map，减少 GC 压力。
-// Result 为新建对象，调用方可安全持有/修改。
+// RunPooled preserves Run semantics while reusing ExecContext and Meta to reduce allocation
+// pressure. It returns a fresh result that callers may retain or modify.
 func (p *Pipeline) RunPooled(ctx context.Context, req *ToolCallRequest, tool *Tool) *ToolCallResult {
-	// 从池中取 ExecContext，并做完整字段复位（防脏复用）。
+	// Acquire an execution context and reset all fields before reuse.
 	ec := execContextPool.Get().(*ExecContext)
 	ec.Request = req
 	ec.Signal = SignalContinue
@@ -46,7 +38,7 @@ func (p *Pipeline) RunPooled(ctx context.Context, req *ToolCallRequest, tool *To
 	} else {
 		clearMeta(ec.Meta)
 	}
-	// 分离的 Result 指针：直接复用 ec.Result，最后拷贝收尾。
+	// Use the pooled result internally, then copy it before returning.
 	inner := ec.Result
 	inner.CallID = req.CallID
 	inner.IsError = false
@@ -61,7 +53,7 @@ func (p *Pipeline) RunPooled(ctx context.Context, req *ToolCallRequest, tool *To
 	return out
 }
 
-// copyResult 把池中 ExecContext 的结果拷贝到新对象并返回（调用方可安全持有）。
+// copyResult returns a fresh copy of the pooled execution result.
 func copyResult(r *ToolCallResult) *ToolCallResult {
 	if r == nil {
 		return nil
@@ -75,19 +67,20 @@ func copyResult(r *ToolCallResult) *ToolCallResult {
 	}
 }
 
-// releaseExecContext 归还 ExecContext 到池中。
+// releaseExecContext returns an execution context to the pool.
 func releaseExecContext(ec *ExecContext) {
 	if ec == nil {
 		return
 	}
-	// 归还前解引用，避免池中对象残留 Request/Result/Ctx 等大引用导致内存悬垂。
+	// Clear references before pooling so requests, results, and contexts are not retained
+	// unnecessarily.
 	ec.Request = nil
 	ec.Result = nil
 	ec.Ctx = nil
 	execContextPool.Put(ec)
 }
 
-// PooledState 返回当前 pooled 模式状态（观测/测试用）。
+// PooledState reports whether pooling is enabled for diagnostics and tests.
 func (p *Pipeline) PooledState() bool {
 	if p == nil {
 		return false

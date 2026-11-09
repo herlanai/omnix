@@ -1,7 +1,4 @@
-﻿// 本文件验证任务 S10：Terminal PTY（跨平台终端会话）。
-//
-// 覆盖：spawn→read→wait reason=exited；单 agent 独占活动；有界回滚截断；
-// 交互 send→read→close 循环。命令脚本按 runtime.GOOS 生成，保证 Windows/Unix 均可跑。
+// S10 cross-platform terminal tests cover spawn/read/wait with reason exited, exclusive active sessions per Agent, bounded scrollback, and send/read/close interaction. Generate scripts by runtime.GOOS for Windows and Unix.
 package tests
 
 import (
@@ -14,7 +11,7 @@ import (
 	"github.com/herlanai/omnix/pkg/terminal"
 )
 
-// TestTerminalSpawnReadWait 验证 spawn → 读取输出 → wait reason=exited。
+// TestTerminalSpawnReadWait verifies spawn, output reads, and wait reason exited.
 func TestTerminalSpawnReadWait(t *testing.T) {
 	ctx := context.Background()
 	name, args := terminal.ShellCommand(echoScript("TERM_MARKER_123"))
@@ -33,7 +30,7 @@ func TestTerminalSpawnReadWait(t *testing.T) {
 	}
 }
 
-// TestTerminalBoundedScrollback 验证有界回滚：输出超过 MaxLines 只保留最近行。
+// TestTerminalBoundedScrollback retains only the latest MaxLines lines.
 func TestTerminalBoundedScrollback(t *testing.T) {
 	ctx := context.Background()
 	name, args := terminal.ShellCommand(lineLoopScript("line-", 20))
@@ -53,7 +50,7 @@ func TestTerminalBoundedScrollback(t *testing.T) {
 	}
 }
 
-// TestTerminalExclusive 验证单 agent 独占：活跃 session 时再次 spawn 报错。
+// TestTerminalExclusive rejects another spawn while the Agent has an active terminal.
 func TestTerminalExclusive(t *testing.T) {
 	ctx := context.Background()
 	name, args := sleepScript()
@@ -68,7 +65,8 @@ func TestTerminalExclusive(t *testing.T) {
 	}
 }
 
-// TestTerminalInteractiveSendRead 验证 send→read→close 交互循环（尽力式：无法交互则跳过）。
+// TestTerminalInteractiveSendRead exercises send/read/close and skips unavailable interactive
+// shells.
 func TestTerminalInteractiveSendRead(t *testing.T) {
 	name, args := interactiveShell()
 	if name == "" {
@@ -91,11 +89,9 @@ func TestTerminalInteractiveSendRead(t *testing.T) {
 	_ = sess.SendLine("exit")
 }
 
-// ============================================================================
-// 跨平台脚本助手
-// ============================================================================
+// Cross-platform script helpers.
 
-// echoScript 生成「输出指定串」的脚本。
+// echoScript prints the supplied string.
 func echoScript(text string) string {
 	esc := strings.ReplaceAll(text, `"`, `""`)
 	if runtime.GOOS == "windows" {
@@ -104,7 +100,7 @@ func echoScript(text string) string {
 	return "echo \"" + esc + "\""
 }
 
-// lineLoopScript 生成循环输出 1..n 行的脚本（Windows 用 cmd for /L，Unix 用 sh while）。
+// lineLoopScript prints lines 1 through n using cmd for /L on Windows and sh while on Unix.
 func lineLoopScript(prefix string, n int) string {
 	if runtime.GOOS == "windows" {
 		return "for /L %i in (1,1," + itoa(n) + ") do @echo " + prefix + "%i"
@@ -112,7 +108,7 @@ func lineLoopScript(prefix string, n int) string {
 	return "i=1; while [ $i -le " + itoa(n) + " ]; do echo " + prefix + "$i; i=$((i+1)); done"
 }
 
-// itoa 把整数转为十进制字符串（测试小工具）。
+// itoa converts an integer to decimal for tests.
 func itoa(v int) string {
 	if v == 0 {
 		return "0"
@@ -127,7 +123,7 @@ func itoa(v int) string {
 	return string(buf[i:])
 }
 
-// sleepScript 生成「运行 1 秒」的脚本。
+// sleepScript runs for approximately one second.
 func sleepScript() (string, []string) {
 	if runtime.GOOS == "windows" {
 		return "powershell", []string{"-NoProfile", "-Command", "Start-Sleep -Seconds 1"}
@@ -135,16 +131,16 @@ func sleepScript() (string, []string) {
 	return "sh", []string{"-c", "sleep 1"}
 }
 
-// interactiveShell 返回可交互的 REPL；无可交互 shell 时返回空串表示跳过。
+// interactiveShell returns a REPL command, or an empty string when unavailable.
 func interactiveShell() (string, []string) {
 	if runtime.GOOS == "windows" {
-		// cmd.exe 交互 REPL 可用（从 stdin 读取命令）。
+		// cmd.exe supports interactive commands through stdin.
 		return "cmd", nil
 	}
 	return "sh", nil
 }
 
-// waitForOutput 轮询会话回滚直到出现 substr 或超时。
+// waitForOutput polls scrollback until a substring appears or the timeout expires.
 func waitForOutput(t *testing.T, sess *terminal.Session, substr string, timeout time.Duration) bool {
 	t.Helper()
 	deadline := time.Now().Add(timeout)

@@ -33,10 +33,10 @@ weight: 2
 ## 运行方式
 
 ```bash
-# 核心内核教程（三步合一）
+# Core-kernel tutorial combining all three steps.
 go run ./examples/tutorial
 
-# 沙箱与审批深入
+# Sandbox and approval details.
 go run ./examples/sandbox_approval
 ```
 

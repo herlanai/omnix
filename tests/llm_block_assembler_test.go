@@ -1,4 +1,4 @@
-// Package tests 的 llm BlockAssembler 验收测试。
+// LLM BlockAssembler tests.
 package tests
 
 import (

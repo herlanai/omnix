@@ -1,11 +1,5 @@
-// Package tests 的沙箱模式事件持久化验收测试。
-//
-// 覆盖：
-//   - sandbox/mode 事件类型定义与 round-trip
-//   - EffectiveSandboxMode fold：取最后一个 sandbox/mode 事件
-//   - 无 sandbox/mode 事件时返回 ok=false
-//   - SetSandboxMode 向会话 append 事件
-//   - source: 'delegation' 子代理委派标记
+// Sandbox-mode persistence tests cover event round trips, latest-event folding, absent-event
+// results, SetSandboxMode appends, and source=delegation for child-agent handoffs.
 package tests
 
 import (
@@ -16,7 +10,7 @@ import (
 	"github.com/herlanai/omnix/pkg/session"
 )
 
-// TestSandboxModeEventType 验证 sandbox/mode 事件类型定义。
+// TestSandboxModeEventType verifies the sandbox/mode event type.
 func TestSandboxModeEventType(t *testing.T) {
 	if session.EventSandboxMode != "sandbox/mode" {
 		t.Fatalf("事件类型应为 sandbox/mode, 实际 %s", session.EventSandboxMode)
@@ -27,7 +21,7 @@ func TestSandboxModeEventType(t *testing.T) {
 	}
 }
 
-// TestSandboxModeRoundTrip 验证 sandbox/mode 事件的 append + 读回 round-trip。
+// TestSandboxModeRoundTrip appends and reads back sandbox/mode.
 func TestSandboxModeRoundTrip(t *testing.T) {
 	sl := session.NewSessionLog(brand.NewSessionID("sbox-test"))
 	_, err := sl.Append(session.SandboxModeData{Mode: string(sandbox.ModeReadOnly)})
@@ -50,7 +44,7 @@ func TestSandboxModeRoundTrip(t *testing.T) {
 	}
 }
 
-// TestEffectiveSandboxModeFold 验证 EffectiveSandboxMode 取最后一个事件。
+// TestEffectiveSandboxModeFold selects the final mode event.
 func TestEffectiveSandboxModeFold(t *testing.T) {
 	sl := session.NewSessionLog(brand.NewSessionID("sbox-fold"))
 	sl.Append(session.SandboxModeData{Mode: string(sandbox.ModeReadOnly)})
@@ -67,7 +61,7 @@ func TestEffectiveSandboxModeFold(t *testing.T) {
 	}
 }
 
-// TestEffectiveSandboxModeNoEvent 验证无事件时返回 ok=false。
+// TestEffectiveSandboxModeNoEvent returns ok=false when no mode event exists.
 func TestEffectiveSandboxModeNoEvent(t *testing.T) {
 	sl := session.NewSessionLog(brand.NewSessionID("sbox-none"))
 	sl.Append(session.UserMessageData{Content: "hello"})
@@ -78,7 +72,7 @@ func TestEffectiveSandboxModeNoEvent(t *testing.T) {
 	}
 }
 
-// TestEffectiveSandboxModeEmpty 验证空事件列表。
+// TestEffectiveSandboxModeEmpty handles an empty event list.
 func TestEffectiveSandboxModeEmpty(t *testing.T) {
 	_, ok := sandbox.EffectiveSandboxMode(nil)
 	if ok {
@@ -86,7 +80,7 @@ func TestEffectiveSandboxModeEmpty(t *testing.T) {
 	}
 }
 
-// TestSetSandboxMode 验证 SetSandboxMode 向会话 append 事件。
+// TestSetSandboxMode appends a mode event to the session.
 func TestSetSandboxMode(t *testing.T) {
 	sl := session.NewSessionLog(brand.NewSessionID("sbox-set"))
 	err := sandbox.SetSandboxMode(sl, sandbox.ModeDangerFullAccess)
@@ -106,7 +100,7 @@ func TestSetSandboxMode(t *testing.T) {
 	}
 }
 
-// TestSetSandboxModeDelegation 验证子代理委派标记 source='delegation'。
+// TestSetSandboxModeDelegation preserves source=delegation.
 func TestSetSandboxModeDelegation(t *testing.T) {
 	sl := session.NewSessionLog(brand.NewSessionID("sbox-deleg"))
 	err := sandbox.SetSandboxModeWithSource(sl, sandbox.ModeWorkspaceWrite, sandbox.ModeSourceDelegation)
@@ -119,7 +113,7 @@ func TestSetSandboxModeDelegation(t *testing.T) {
 	}
 }
 
-// TestSandboxModeSessionInterface 验证 SessionLog 实现 SandboxMode 时从事件 fold。
+// TestSandboxModeSessionInterface derives SessionLog.SandboxMode from events.
 func TestSandboxModeSessionInterface(t *testing.T) {
 	sl := session.NewSessionLog(brand.NewSessionID("sbox-iface"))
 	sl.Append(session.SandboxModeData{Mode: string(sandbox.ModeReadOnly)})
