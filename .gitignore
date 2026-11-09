@@ -1,0 +1,52 @@
+# If you prefer the allow list template instead of the deny list, see community template:
+# https://github.com/github/gitignore/blob/main/community/Golang/Go.AllowList.gitignore
+#
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary, built with `go test -c`
+*.test
+
+# Code coverage profiles and other test artifacts
+*.out
+coverage.*
+*.coverprofile
+profile.cov
+
+# Dependency directories (remove the comment below to include it)
+# vendor/
+
+# Go workspace file
+go.work
+go.work.sum
+
+# env file
+.env
+
+# Editor/IDE
+# .idea/
+# .vscode/
+
+# 任务表 / 设计文档（docs/）纳入版本控制，确保任务状态可追踪、可提交。
+# 仅忽略运行时生成的报告产物与本地对话历史（不进入版本库）：
+#   - docs/*.html                   运行时生成的 HTML 报告
+#   - docs/trace.md                 本地对话/演进历史（保留本地维护）
+# Keep SDK notes visible even when the global gitignore excludes docs.
+!/docs/
+!/docs/SDK_CORE.md
+docs/*.html
+docs/trace.md
+trace.md
+
+# Hugo 文档站（site/）构建产物与本地锁文件
+# site/ 源码（content/hugo.yaml/layouts 等）纳入版本控制
+site/public/
+site/public-local/
+site/.hugo_build.lock
+site/resources/
+site/.hugo/
+site/.cache/

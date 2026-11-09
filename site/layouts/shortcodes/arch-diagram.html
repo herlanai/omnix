@@ -1,0 +1,108 @@
+<!-- ========== 架构图：玻璃节点 + 数据流动画 ========== -->
+<div class="omnix-arch">
+  <svg class="omnix-arch-svg" viewBox="0 0 985 440" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="omnix architecture: event sourcing, fold projection, agent loop, tools, LLM">
+    <defs>
+      <linearGradient id="omnixGlass" x1="0" y1="0" x2="1" y2="1">
+        <stop offset="0%" stop-color="rgba(255,255,255,0.16)"/>
+        <stop offset="100%" stop-color="rgba(255,255,255,0.04)"/>
+      </linearGradient>
+      <linearGradient id="omnixGlassActive" x1="0" y1="0" x2="1" y2="1">
+        <stop offset="0%" stop-color="rgba(77,107,254,0.28)"/>
+        <stop offset="100%" stop-color="rgba(34,211,238,0.10)"/>
+      </linearGradient>
+      <linearGradient id="omnixLine" x1="0" y1="0" x2="1" y2="0">
+        <stop offset="0%" stop-color="rgba(124,147,255,0.05)"/>
+        <stop offset="50%" stop-color="rgba(124,147,255,0.7)"/>
+        <stop offset="100%" stop-color="rgba(244,114,182,0.05)"/>
+      </linearGradient>
+    </defs>
+
+    <!-- 连接线 -->
+    <g stroke="rgba(124,147,255,0.45)" stroke-width="2" stroke-linecap="round">
+      <!-- User -> Session -->
+      <path id="omnixEdge1" d="M150 40 C 150 70, 150 80, 150 110"/>
+      <!-- Session -> Fold -->
+      <path id="omnixEdge2" d="M150 210 C 150 225, 150 228, 150 240"/>
+      <!-- Session -> Prompt -->
+      <path id="omnixEdge3" d="M285 160 C 380 150, 420 170, 495 210"/>
+      <!-- Fold -> Prompt -->
+      <path id="omnixEdge4" d="M285 280 C 380 270, 430 250, 495 235"/>
+      <!-- Prompt -> Agent Loop -->
+      <path id="omnixEdge5" d="M495 235 L 545 235"/>
+      <!-- Agent Loop -> Tools -->
+      <path id="omnixEdge6" d="M695 235 C 706 235, 715 210, 730 190"/>
+      <!-- Tools -> LLM -->
+      <path id="omnixEdge7" d="M840 160 C 840 200, 840 260, 838 300"/>
+      <!-- LLM -> Agent Loop (返回) -->
+      <path id="omnixEdge8" d="M840 330 C 700 380, 640 320, 620 285"/>
+    </g>
+
+    <!-- 数据流动点 -->
+    <g>
+      <circle r="4" fill="#22d3ee"><animateMotion dur="2.4s" repeatCount="indefinite"><mpath href="#omnixEdge1"/></animateMotion></circle>
+      <circle r="4" fill="#7c93ff"><animateMotion dur="2.4s" repeatCount="indefinite"><mpath href="#omnixEdge2"/></animateMotion></circle>
+      <circle r="4" fill="#a78bfa"><animateMotion dur="3.0s" repeatCount="indefinite"><mpath href="#omnixEdge3"/></animateMotion></circle>
+      <circle r="4" fill="#a78bfa"><animateMotion dur="3.0s" repeatCount="indefinite" begin="0.5s"><mpath href="#omnixEdge4"/></animateMotion></circle>
+      <circle r="4" fill="#4d6bfe"><animateMotion dur="2.0s" repeatCount="indefinite"><mpath href="#omnixEdge5"/></animateMotion></circle>
+      <circle r="4" fill="#22d3ee"><animateMotion dur="2.6s" repeatCount="indefinite"><mpath href="#omnixEdge6"/></animateMotion></circle>
+      <circle r="4" fill="#f472b6"><animateMotion dur="2.8s" repeatCount="indefinite"><mpath href="#omnixEdge7"/></animateMotion></circle>
+      <circle r="4" fill="#f472b6"><animateMotion dur="2.8s" repeatCount="indefinite" begin="0.4s"><mpath href="#omnixEdge8"/></animateMotion></circle>
+    </g>
+
+    <!-- 节点 -->
+    <!-- User -->
+    <g class="omnix-node">
+      <rect x="60" y="16" width="180" height="52" rx="26" fill="url(#omnixGlass)" stroke="rgba(255,255,255,0.28)" stroke-width="1.5"/>
+      <text x="150" y="47" text-anchor="middle" fill="#f2f5ff" font-size="17" font-weight="600">User</text>
+    </g>
+
+    <!-- Session / Event Log -->
+    <g class="omnix-node">
+      <rect x="30" y="120" width="240" height="88" rx="16" fill="url(#omnixGlassActive)" stroke="rgba(77,107,254,0.6)" stroke-width="1.5"/>
+      <text x="150" y="152" text-anchor="middle" fill="#e6ecff" font-size="17" font-weight="700">Session · Event Sourcing</text>
+      <text x="150" y="176" text-anchor="middle" fill="#9aa3c7" font-size="13">append-only log · replayable</text>
+    </g>
+
+    <!-- Persistence（事件溯源落地点） -->
+    <g class="omnix-node omnix-node-3">
+      <rect x="285" y="176" width="150" height="52" rx="26" fill="url(#omnixGlass)" stroke="rgba(167,139,250,0.5)" stroke-width="1.5"/>
+      <text x="360" y="200" text-anchor="middle" fill="#e6ecff" font-size="14" font-weight="600">Persistence</text>
+      <text x="360" y="218" text-anchor="middle" fill="#9aa3c7" font-size="11">JSONL · SQLite</text>
+    </g>
+
+    <!-- Fold / Projection -->
+    <g class="omnix-node omnix-node-2">
+      <rect x="30" y="250" width="240" height="88" rx="16" fill="url(#omnixGlass)" stroke="rgba(255,255,255,0.25)" stroke-width="1.5"/>
+      <text x="150" y="282" text-anchor="middle" fill="#e6ecff" font-size="17" font-weight="700">Fold / Projection</text>
+      <text x="150" y="306" text-anchor="middle" fill="#9aa3c7" font-size="13">state = f(events) · O(N)</text>
+    </g>
+
+    <!-- Prompt Assembly -->
+    <g class="omnix-node omnix-node-3">
+      <rect x="30" y="360" width="240" height="60" rx="16" fill="url(#omnixGlass)" stroke="rgba(255,255,255,0.25)" stroke-width="1.5"/>
+      <text x="150" y="395" text-anchor="middle" fill="#e6ecff" font-size="16" font-weight="600">Prompt Assembly</text>
+    </g>
+
+    <!-- Agent Turn/Step Loop -->
+    <g class="omnix-node omnix-node-2">
+      <rect x="495" y="175" width="200" height="120" rx="18" fill="url(#omnixGlassActive)" stroke="rgba(34,211,238,0.55)" stroke-width="1.5"/>
+      <text x="595" y="222" text-anchor="middle" fill="#f2f5ff" font-size="18" font-weight="700">Agent Loop</text>
+      <text x="595" y="248" text-anchor="middle" fill="#9aa3c7" font-size="13">Turn / Step 双循环</text>
+      <text x="595" y="268" text-anchor="middle" fill="#9aa3c7" font-size="13">Goal · 取消 · 重试</text>
+    </g>
+
+    <!-- Tool Waterfall -->
+    <g class="omnix-node">
+      <rect x="730" y="120" width="220" height="88" rx="16" fill="url(#omnixGlass)" stroke="rgba(255,255,255,0.25)" stroke-width="1.5"/>
+      <text x="840" y="152" text-anchor="middle" fill="#e6ecff" font-size="17" font-weight="700">Tool Waterfall</text>
+      <text x="840" y="176" text-anchor="middle" fill="#9aa3c7" font-size="13">pre → execute → post → result</text>
+    </g>
+
+    <!-- LLM -->
+    <g class="omnix-node omnix-node-3">
+      <rect x="730" y="300" width="220" height="76" rx="16" fill="url(#omnixGlass)" stroke="rgba(244,114,182,0.4)" stroke-width="1.5"/>
+      <text x="840" y="332" text-anchor="middle" fill="#e6ecff" font-size="17" font-weight="700">LLM · DeepSeek</text>
+      <text x="840" y="354" text-anchor="middle" fill="#9aa3c7" font-size="13">streaming · retry · cache</text>
+    </g>
+  </svg>
+</div>

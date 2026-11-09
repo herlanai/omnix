@@ -1,0 +1,591 @@
+// Package agent 提供 Agent Registry 与 Turn/Step 双循环执行器。
+//
+// 对齐上游：packages/core/agent + agent-loop
+//
+// 设计要点：
+//   - Agent 通过 Inbox 双队列（turn 队列）接收 Run/Followup 输入；
+//   - 后台 worker 串行处理 turn（单 Turn 串行保证）：turn/start → claim → pre-step →
+//     多 Step → turn-stopping → turn/end；
+//   - 每个 Step：step/start → 派生 → agent/request → llm/stream → assistant/chunk* →
+//     若含工具调用则经 M23 四级流水线执行 → step/end；
+//   - step/tool 错误 → agent/error 写入日志，turn 以 interrupted 关闭；
+//   - pending turn 超过队列容量 → ErrTurnQueueFull（reject）。
+package agent
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/herlanai/omnix/pkg/brand"
+	"github.com/herlanai/omnix/pkg/llm"
+	"github.com/herlanai/omnix/pkg/session"
+	"github.com/herlanai/omnix/pkg/sysprompt"
+	"github.com/herlanai/omnix/pkg/tools"
+)
+
+// ErrTurnQueueFull 表示 pending turn 队列已满（拒绝新的 Run/Followup）。
+var ErrDisposed = errors.New("agent: disposed")
+
+var ErrTurnQueueFull = errors.New("agent: turn queue full, reject pending turn")
+
+// CancelCause 是取消原因分类（M18：5 类）。
+type CancelCause string
+
+// 取消原因枚举（与上游 Agent.Cancel 的 5 类对齐）。
+const (
+	// CancelUser 用户主动取消。
+	CancelUser CancelCause = "user"
+	// CancelParent 父代理取消（subagent 场景）。
+	CancelParent CancelCause = "parent"
+	// CancelHook hook 因拒绝触发取消。
+	CancelHook CancelCause = "hook"
+	// CancelDisposed 代理被释放（dispose）导致的取消。
+	CancelDisposed CancelCause = "disposed"
+	// CancelLegacy 历史/兼容性取消路径。
+	CancelLegacy CancelCause = "legacy"
+)
+
+// Agent 是代理执行器。
+type Agent struct {
+	// ID 会话 ID（复用 SessionLog 的 ID）。
+	ID brand.SessionID
+	// log 事件溯源日志（M04）。
+	log *session.SessionLog
+	// sys system prompt 组装器（M09）。
+	sys *sysprompt.Assembler
+	// pipeline 工具四级流水线（M23）。
+	pipeline *tools.Pipeline
+	// adapter LLM 适配器（M07）。
+	adapter llm.LLMAdapter
+	// options Agent 配置（provider/model/reasoningEffort/maxTokens）。
+	options AgentOptions
+	// inbox Agent 拥有的待处理消息双队列（next-turn/next-step）。
+	inbox *Inbox
+
+	// turnCh turn 队列（容量 2：1 运行中 + 1 排队）。
+	turnCh chan *turnReq
+	// stopCh 停止 worker 信号。
+	stopCh chan struct{}
+	// wg worker 生命周期。
+	wg sync.WaitGroup
+	// started 是否已启动 worker。
+	started bool
+	// mu 保护 started 和 status。
+	mu sync.Mutex
+	// status 当前生命周期状态（idle/running）。
+	status AgentStatus
+	// idleCh 用于 whenIdle 等待（每次 status 变为 idle 时关闭并重建）。
+	idleCh chan struct{}
+	// pendingToolRounds 上一步产出的工具调用数（用于续步判断）。
+	pendingToolRounds int
+	// toolProvider 按工具名解析工具（测试可注入 mock；生产由 harness 注入）。
+	toolProvider func(name string) *tools.Tool
+	// runCtx 本次运行的上游 ctx（H01：取消/超时/追踪透传）。默认 Background。
+	runCtx       context.Context
+	runTimeout   time.Duration
+	activeCancel context.CancelFunc
+	generation   uint64
+	disposed     bool
+	pending      int
+}
+
+// turnReq 是单个 turn 的请求。
+type turnReq struct {
+	generation uint64
+	// kind "run" / "followup"。
+	kind string
+	// input 用户输入。
+	input string
+	// done 完成通知（cap 1，非阻塞）。
+	done chan error
+}
+
+// NewAgent 创建代理。
+// adapter 可为 nil（测试时由 Start 前的 mock 注入）。
+// options 可为 nil（使用默认配置）。
+func NewAgent(id brand.SessionID, log *session.SessionLog, sys *sysprompt.Assembler, pipeline *tools.Pipeline, adapter llm.LLMAdapter, options ...AgentOptions) *Agent {
+	opts := AgentOptions{}
+	if len(options) > 0 {
+		opts = options[0]
+	}
+	a := &Agent{
+		ID:       id,
+		log:      log,
+		sys:      sys,
+		pipeline: pipeline,
+		adapter:  adapter,
+		options:  opts,
+		turnCh:   make(chan *turnReq, 2),
+		stopCh:   make(chan struct{}),
+		status:   StatusIdle,
+		idleCh:   make(chan struct{}),
+	}
+	// 初始状态是 idle，关闭 idleCh 以便 whenIdle 立即返回
+	close(a.idleCh)
+	// 初始化 Inbox（从日志重放历史事件）
+	a.inbox = NewInbox(log, InboxNotifications{})
+	return a
+}
+
+// Inbox 返回 Agent 的收件箱（待处理消息双队列）。
+func (a *Agent) Inbox() *Inbox {
+	return a.inbox
+}
+
+// Options 返回 Agent 的配置（只读）。
+func (a *Agent) Options() AgentOptions {
+	return a.options
+}
+
+// Status 返回当前生命周期状态（idle/running）。
+func (a *Agent) Status() AgentStatus {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.status
+}
+
+// WhenIdle 等待 Agent 活动达到静止。
+// 如果当前已经是 idle，立即返回。
+func (a *Agent) WhenIdle(ctx context.Context) error {
+	a.mu.Lock()
+	idleCh := a.idleCh
+	a.mu.Unlock()
+
+	select {
+	case <-idleCh:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// SetToolProvider 注入工具解析函数。
+func (a *Agent) SetToolProvider(fn func(name string) *tools.Tool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.toolProvider = fn
+}
+
+// SetRunContext 绑定本次运行的上游 ctx（H01）：可取消父 ctx + 可选超时预算。
+// timeout<=0 uses DefaultTimeout, or only parent cancellation when both are zero.
+func (a *Agent) SetRunContext(parent context.Context, timeout time.Duration) {
+	if parent == nil {
+		parent = context.Background()
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.runCtx = parent
+	a.runTimeout = timeout
+}
+
+// runContext 返回生效的运行 ctx（未设置则回退 Background，保证非 nil）。
+func (a *Agent) runContext() context.Context {
+	if a.runCtx == nil {
+		return context.Background()
+	}
+	return a.runCtx
+}
+
+// Log 返回事件溯源日志（供测试/上层读取派生状态）。
+func (a *Agent) Log() *session.SessionLog {
+	return a.log
+}
+
+// loop serializes accepted turns.
+func (a *Agent) loop() {
+	defer a.wg.Done()
+	for {
+		select {
+		case <-a.stopCh:
+			return
+		case req := <-a.turnCh:
+			a.runTurn(req)
+		}
+	}
+}
+
+func (a *Agent) submit(input, kind string) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.disposed {
+		return ErrDisposed
+	}
+	if !a.started {
+		a.started = true
+		a.wg.Add(1)
+		go a.loop()
+	}
+	req := &turnReq{generation: a.generation, kind: kind, input: input, done: make(chan error, 1)}
+	select {
+	case a.turnCh <- req:
+		if a.pending == 0 {
+			a.idleCh = make(chan struct{})
+		}
+		a.pending++
+		return nil
+	default:
+		return ErrTurnQueueFull
+	}
+}
+
+// Run queues a new turn. WhenIdle waits for all accepted work.
+func (a *Agent) Run(input string) error { return a.submit(input, "run") }
+
+// Followup queues a subsequent turn.
+func (a *Agent) Followup(input string) error { return a.submit(input, "followup") }
+
+// Dispose permanently closes the agent and cancels active and pending work.
+// Tool and adapter implementations must honor context cancellation.
+func (a *Agent) Dispose() {
+	a.mu.Lock()
+	if !a.disposed {
+		a.disposed = true
+		close(a.stopCh)
+		if a.activeCancel != nil {
+			_ = RecordCancel(a.log, CancelDisposed)
+			a.activeCancel()
+		}
+		a.drainLocked()
+	}
+	a.mu.Unlock()
+	a.wg.Wait()
+}
+
+func (a *Agent) drainLocked() {
+	for {
+		select {
+		case req := <-a.turnCh:
+			req.done <- context.Canceled
+			a.pending--
+			if a.pending == 0 {
+				a.status = StatusIdle
+				close(a.idleCh)
+			}
+		default:
+			return
+		}
+	}
+}
+
+// Cancel aborts the active turn and discards queued work unless KeepInbox is set.
+func (a *Agent) Cancel(cause CancelCause) { a.CancelWithOptions(cause, CancelOptions{}) }
+func (a *Agent) CancelWithOptions(cause CancelCause, opts CancelOptions) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	_ = RecordCancel(a.log, cause)
+	if a.activeCancel != nil {
+		a.activeCancel()
+	}
+	if !opts.KeepInbox {
+		a.generation++
+		a.drainLocked()
+	}
+}
+
+// runTurn 执行单个 turn（串行保证：一次只运行一个 turn）。
+func (a *Agent) runTurn(req *turnReq) {
+	var turnErr error
+	a.mu.Lock()
+	if a.disposed || req.generation != a.generation {
+		a.pending--
+		if a.pending == 0 {
+			a.status = StatusIdle
+			close(a.idleCh)
+		}
+		a.mu.Unlock()
+		req.done <- context.Canceled
+		return
+	}
+	parent := a.runContext()
+	timeout := a.runTimeout
+	if timeout <= 0 {
+		timeout = a.options.DefaultTimeout
+	}
+	ctx, cancel := context.WithCancel(parent)
+	if timeout > 0 {
+		var timeoutCancel context.CancelFunc
+		ctx, timeoutCancel = context.WithTimeout(ctx, timeout)
+		oldCancel := cancel
+		cancel = func() { timeoutCancel(); oldCancel() }
+	}
+	a.activeCancel = cancel
+	if a.disposed {
+		cancel()
+	}
+	wasIdle := a.status == StatusIdle
+	a.status = StatusRunning
+	a.mu.Unlock()
+	if wasIdle {
+		_, _ = a.log.Append(session.AgentStatusData{Status: string(StatusRunning)})
+	}
+	defer func() {
+		cancel()
+		a.mu.Lock()
+		a.activeCancel = nil
+		a.pending--
+		if a.pending == 0 {
+			a.status = StatusIdle
+			_, _ = a.log.Append(session.AgentStatusData{Status: string(StatusIdle)})
+			close(a.idleCh)
+		}
+		a.mu.Unlock()
+		req.done <- turnErr
+	}()
+
+	// 查询当前 turn 编号（从 SessionLog 状态获取，保证严格单调递增）
+	turnIdx := a.log.NextTurn()
+
+	// turn/start
+	if _, err := a.log.Append(session.TurnStartData{Turn: turnIdx}); err != nil {
+		turnErr = err
+		return
+	}
+
+	// 记录 user/message（run 与 followup 均为用户输入）
+	if _, err := a.log.Append(session.UserMessageData{Content: req.input, Source: req.kind}); err != nil {
+		_ = a.failTurn(turnIdx, turnErr, err)
+		turnErr = err
+		return
+	}
+
+	// 多 Step 循环：每步调用 LLM，直到无工具调用或出错
+	stepSeq := uint64(1)
+	for {
+		// step/start
+		if _, err := a.log.Append(session.StepStartData{Turn: turnIdx, Step: stepSeq}); err != nil {
+			_ = a.failTurn(turnIdx, turnErr, err)
+			turnErr = err
+			return
+		}
+
+		err := a.runStep(ctx, req, stepSeq)
+		// step/end
+		_, _ = a.log.Append(session.StepEndData{Turn: turnIdx, Step: stepSeq})
+
+		if err != nil {
+			// agent/error + turn 以 interrupted 关闭
+			_ = a.failTurn(turnIdx, turnErr, err)
+			turnErr = err
+			return
+		}
+
+		// 检查本轮是否产出了工具调用且已执行；这里由 runStep 返回的
+		// "是否有工具调用"决定是否继续下一 step
+		cont := a.lastStepHadToolCall()
+		if !cont {
+			break
+		}
+		stepSeq++
+	}
+
+	// turn-stopping → turn/end (finished)
+	_, _ = a.log.Append(session.TurnStoppingData{Reason: "finished"})
+	_, _ = a.log.Append(session.TurnEndData{Turn: turnIdx, Reason: session.ReasonFinished})
+}
+
+// lastStepHadToolCall 返回上一步是否执行过工具调用（内部状态）。
+func (a *Agent) lastStepHadToolCall() bool {
+	return a.pendingToolRounds > 0
+}
+
+// failTurn 记录 agent/error 并以 interrupted 关闭 turn。
+func (a *Agent) failTurn(turnIdx uint64, prev, err error) error {
+	_, _ = a.log.Append(session.AgentErrorData{Message: err.Error(), Pkg: "pkg/agent"})
+	_, _ = a.log.Append(session.TurnEndData{Turn: turnIdx, Reason: endReason(err)})
+	return err
+}
+
+// runStep 执行单个 step：派生 → 请求 → 流式 → 工具执行。
+func (a *Agent) runStep(runCtx context.Context, req *turnReq, stepSeq uint64) error {
+	if err := runCtx.Err(); err != nil {
+		return err
+	}
+	if a.adapter == nil {
+		return errors.New("agent: LLM adapter missing")
+	}
+	// agent/request
+	_, _ = a.log.Append(session.AgentRequestData{Provider: a.adapterName(), Model: a.modelName()})
+
+	// 组装 prompt
+	system := ""
+	if a.sys != nil {
+		system = a.sys.Assemble()
+	}
+	schemas, schemaErr := a.toolSchemas()
+	if schemaErr != nil {
+		return schemaErr
+	}
+	messages := deriveModelMessages(a.log.Events())
+	var toolCalls []*llm.ToolCall
+	var text, reasoning strings.Builder
+	_, err := a.adapter.Chat(runCtx, llm.ChatRequest{
+		Model:           a.modelName(),
+		System:          system,
+		Messages:        messages,
+		Tools:           schemas,
+		MaxTokens:       a.options.MaxTokens,
+		ReasoningEffort: a.options.ReasoningEffort,
+	}, func(chunk llm.StreamChunk) {
+		switch chunk.Kind {
+		case llm.ChunkText:
+			text.WriteString(chunk.Text)
+			_, _ = a.log.Append(session.AssistantChunkData{Text: chunk.Text})
+		case llm.ChunkReasoning:
+			reasoning.WriteString(chunk.Reasoning)
+			_, _ = a.log.Append(session.AssistantReasoningData{Text: chunk.Reasoning})
+		case llm.ChunkToolCall:
+			if chunk.ToolCall != nil {
+				toolCalls = append(toolCalls, chunk.ToolCall)
+			}
+		}
+	})
+	if text.Len() > 0 || reasoning.Len() > 0 || len(toolCalls) > 0 {
+		ids := make([]string, 0, len(toolCalls))
+		if err == nil {
+			for _, tc := range toolCalls {
+				ids = append(ids, tc.ID)
+			}
+		}
+		if _, appendErr := a.log.Append(session.AssistantMessageData{Content: text.String(), Reasoning: reasoning.String(), ToolCallIDs: ids}); appendErr != nil {
+			return appendErr
+		}
+	}
+	if err != nil {
+		return fmt.Errorf("llm step failed: %w", err)
+	}
+	if err := runCtx.Err(); err != nil {
+		return err
+	}
+
+	// 执行工具调用
+	if len(toolCalls) > 0 {
+		a.pendingToolRounds = len(toolCalls)
+		for _, tc := range toolCalls {
+			if err := a.executeTool(runCtx, tc); err != nil {
+				return err
+			}
+		}
+		a.pendingToolRounds = len(toolCalls)
+	} else {
+		a.pendingToolRounds = 0
+	}
+	return nil
+}
+
+// pendingToolRounds 记录上一步的工具调用数量（用于续步判断）。
+// 若上一步有工具调用则继续下一步（与上游 React 循环一致）。
+
+// executeTool 经 M23 流水线执行单个工具调用。
+func (a *Agent) executeTool(ctx context.Context, tc *llm.ToolCall) error {
+	callID := brand.NewToolCallID(tc.ID)
+	// tool/call
+	if _, err := a.log.Append(session.ToolCallData{CallID: callID, Tool: tc.Name, Input: toRaw(tc.Input)}); err != nil {
+		return err
+	}
+
+	if a.pipeline == nil {
+		// 无流水线时直接记录结果
+		_, _ = a.log.Append(session.ToolResultData{CallID: callID, IsError: true, Output: "tool pipeline missing"})
+		return nil
+	}
+
+	req := &tools.ToolCallRequest{CallID: callID, Tool: tc.Name, Input: tc.Input}
+	res := a.pipeline.Run(ctx, req, a.findTool(tc.Name))
+	output := stringify(res.Value)
+	if res.IsError && res.Error != "" {
+		output = res.Error
+	}
+	_, err := a.log.Append(session.ToolResultData{
+		CallID: callID, IsError: res.IsError, Output: output,
+	})
+	return err
+}
+
+// adapterName / modelName resolve adapter and configured model information.
+func (a *Agent) adapterName() string {
+	if a.adapter == nil {
+		return "unknown"
+	}
+	return a.adapter.Name()
+}
+
+func (a *Agent) modelName() string {
+	if a.options.Model != "" {
+		return a.options.Model
+	}
+	return "deepseek-chat"
+}
+
+// toolSchemas exports the registered tool definitions in deterministic order.
+func (a *Agent) toolSchemas() ([]llm.ToolSchema, error) {
+	if a.pipeline == nil {
+		return nil, nil
+	}
+	var out []llm.ToolSchema
+	for _, tool := range a.pipeline.Tools() {
+		params := map[string]any{"type": "object", "properties": map[string]any{}}
+		if tool.Schema != nil {
+			data, err := json.Marshal(tool.Schema)
+			if err != nil {
+				return nil, fmt.Errorf("agent: tool %q schema: %w", tool.Name, err)
+			}
+			if err := json.Unmarshal(data, &params); err != nil {
+				return nil, err
+			}
+		}
+		out = append(out, llm.ToolSchema{Name: tool.Name, Description: tool.Description, Parameters: params})
+	}
+	return out, nil
+}
+
+// findTool 通过 agent 注入的工具解析函数解析工具；未注入时返回 nil。
+func (a *Agent) findTool(name string) *tools.Tool {
+	a.mu.Lock()
+	provider := a.toolProvider
+	a.mu.Unlock()
+	if provider != nil {
+		return provider(name)
+	}
+	if a.pipeline != nil {
+		return a.pipeline.Lookup(name)
+	}
+	return nil
+}
+
+// jsonMarshal 便捷 JSON 序列化。
+func jsonMarshal(v any) ([]byte, error) {
+	return json.Marshal(v)
+}
+
+// toRaw 将 map 参数转为 json.RawMessage。
+func toRaw(input map[string]any) []byte {
+	if input == nil {
+		return nil
+	}
+	b, _ := jsonMarshal(input)
+	return b
+}
+
+// stringify 将工具结果转为字符串。
+func stringify(v any) string {
+	if v == nil {
+		return ""
+	}
+	if s, ok := v.(string); ok {
+		return s
+	}
+	b, _ := jsonMarshal(v)
+	return string(b)
+}
+
+func endReason(err error) session.TurnEndReason {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return session.ReasonAborted
+	}
+	return session.ReasonInterrupted
+}
