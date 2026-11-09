@@ -31,13 +31,13 @@ go.work.sum
 # .idea/
 # .vscode/
 
-# Track task and design documents in docs/ so task progress is versioned.
+# Track source documentation.
 # Ignore only generated reports and local conversation history:
 #   - docs/*.html: generated HTML reports
 #   - docs/trace.md: locally maintained conversation and development history
-# Keep SDK notes visible even when the global gitignore excludes docs.
+# Keep documentation visible even when global ignore rules exclude docs.
 !/docs/
-!/docs/SDK_CORE.md
+!/docs/**
 docs/*.html
 docs/trace.md
 trace.md

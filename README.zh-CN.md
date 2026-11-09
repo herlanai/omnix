@@ -170,13 +170,13 @@ go test ./tests -run '^$' -bench '^BenchmarkSQLiteSearch$' -benchmem
 ## 开发与验证
 
 ```bash
-gofmt -w cmd examples internal pkg tests
+gofmt -w examples internal pkg tests
 go vet ./...
 go test ./...
 go test -race ./...
 ```
 
-测试包含本地 HTTP/SSE 模拟服务，运行环境需要允许监听回环地址。部分规划中的用例仍以显式跳过的测试骨架保留。代码注释统一使用英文；行为变更应补充回归测试，性能改动使用独立基准衡量。
+测试包含本地 HTTP/SSE 模拟服务，运行环境需要允许监听回环地址。代码注释统一使用英文；行为变更应补充回归测试，性能改动使用独立基准衡量。
 
 ## 当前实现范围
 
@@ -184,16 +184,18 @@ go test -race ./...
 
 MCP 网络传输、完整的 Inbox steering，以及压缩和重试策略的自动装配仍需进一步集成。沙箱约束能力因后端而异，Windows 实现仍有未完成的约束路径；部署前应核对对应包的实现。
 
-详细行为见 [SDK 执行链路与集成边界](docs/SDK_CORE.md)。
+详细行为见 [SDK 执行链路与集成边界](docs/zh-CN/agent.md)。
 
 ## 文档
 
-- [SDK 执行链路](docs/SDK_CORE.md)
-- [设计与任务记录](docs/TASKS.md)
-- [测试用例规格](docs/TEST_CASES.md)
-- [前缀缓存设计](docs/CACHE_HIT_RATE_PLAN.md)
+从[简体中文文档](docs/zh-CN/README.md)或 [English guides](docs/en/README.md) 开始阅读。
 
-设计和任务记录中包含历史规划，当前行为以实现和测试为准。
+- [运行时架构](docs/zh-CN/architecture.md)
+- [运行 Agent](docs/zh-CN/agent.md)
+- [工具与执行策略](docs/zh-CN/tools.md)
+- [会话持久化](docs/zh-CN/persistence.md)
+- [用量与性能观测](docs/zh-CN/observability.md)
+- [开发指南](docs/zh-CN/development.md)
 
 ## 来源与许可证
 

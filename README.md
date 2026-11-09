@@ -170,13 +170,13 @@ go test ./tests -run '^$' -bench '^BenchmarkSQLiteSearch$' -benchmem
 ## Development
 
 ```bash
-gofmt -w cmd examples internal pkg tests
+gofmt -w examples internal pkg tests
 go vet ./...
 go test ./...
 go test -race ./...
 ```
 
-Tests include local HTTP/SSE mock servers; the test environment must allow loopback listeners. Some planned cases remain explicitly skipped placeholders. Keep code comments in English and add regression tests for behavior changes. Measure performance changes with benchmarks separately from functional assertions.
+Tests include local HTTP/SSE mock servers; the test environment must allow loopback listeners. Keep code comments in English and add regression tests for behavior changes. Measure performance changes with benchmarks separately from functional assertions.
 
 ## Implementation scope
 
@@ -184,16 +184,18 @@ The built-in model adapter targets DeepSeek. Other providers implement `llm.LLMA
 
 MCP network transports, complete inbox steering, and automatic orchestration of compaction and retry policies still require further integration. Sandbox enforcement varies by backend, and the Windows implementation contains incomplete enforcement paths. Review the relevant package before relying on it in a deployment.
 
-See [SDK execution behavior and integration boundaries](docs/SDK_CORE.md) for details.
+See [SDK execution behavior and integration boundaries](docs/en/agent.md) for details.
 
 ## Documentation
 
-- [SDK execution guide](docs/SDK_CORE.md)
-- [Design and task records](docs/TASKS.md)
-- [Test-case specifications](docs/TEST_CASES.md)
-- [Prefix-cache design notes](docs/CACHE_HIT_RATE_PLAN.md)
+Start with the [English guides](docs/en/README.md) or [简体中文文档](docs/zh-CN/README.md).
 
-Design and task records include historical plans; consult implementation and tests for current behavior.
+- [Runtime architecture](docs/en/architecture.md)
+- [Running an agent](docs/en/agent.md)
+- [Tools and execution policy](docs/en/tools.md)
+- [Persisting sessions](docs/en/persistence.md)
+- [Usage and performance](docs/en/observability.md)
+- [Development](docs/en/development.md)
 
 ## Origins and license
 
