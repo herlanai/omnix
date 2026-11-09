@@ -1,8 +1,0 @@
-# omnix Simplified Chinese localization overrides.
-# Override Hextra's default footer copyright text.
-copyright: "© 2026 omnix — DeepSeek Harness Agent 的 Go 参考实现"
-poweredBy: ""
-
-# Author's WeChat details in the footer.
-authorWechat: "作者微信"
-wechatScanHint: "扫码加作者，交流 Agent · Go"

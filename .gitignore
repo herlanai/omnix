@@ -41,12 +41,3 @@ go.work.sum
 docs/*.html
 docs/trace.md
 trace.md
-
-# Hugo documentation build artifacts and local lock files.
-# Track site sources, including content, hugo.yaml, and layouts.
-site/public/
-site/public-local/
-site/.hugo_build.lock
-site/resources/
-site/.hugo/
-site/.cache/

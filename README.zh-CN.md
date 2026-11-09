@@ -192,7 +192,6 @@ MCP 网络传输、完整的 Inbox steering，以及压缩和重试策略的自�
 - [设计与任务记录](docs/TASKS.md)
 - [测试用例规格](docs/TEST_CASES.md)
 - [前缀缓存设计](docs/CACHE_HIT_RATE_PLAN.md)
-- [文档站源码](site/)
 
 设计和任务记录中包含历史规划，当前行为以实现和测试为准。
 

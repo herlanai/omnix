@@ -192,7 +192,6 @@ See [SDK execution behavior and integration boundaries](docs/SDK_CORE.md) for de
 - [Design and task records](docs/TASKS.md)
 - [Test-case specifications](docs/TEST_CASES.md)
 - [Prefix-cache design notes](docs/CACHE_HIT_RATE_PLAN.md)
-- [Documentation site source](site/)
 
 Design and task records include historical plans; consult implementation and tests for current behavior.
 
