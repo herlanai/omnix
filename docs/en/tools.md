@@ -129,3 +129,5 @@ See [dispatch and guard tests](../../pkg/tools/dispatch_test.go), [pool tests](.
 go test ./pkg/tools
 go test ./tests -run 'TestToolRestriction|TestPreToolDecision|TestPreDecisionFromApproval'
 ```
+
+For ready-to-register search and fetch tools, see [DeepSeek web tools](web-tools.md).

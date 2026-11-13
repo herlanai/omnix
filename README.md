@@ -195,6 +195,7 @@ Start with the [English guides](docs/en/README.md) or [简体中文文档](docs/
 - [Tools and execution policy](docs/en/tools.md)
 - [Persisting sessions](docs/en/persistence.md)
 - [Usage and performance](docs/en/observability.md)
+- [DeepSeek web search and fetch](docs/en/web-tools.md)
 - [Development](docs/en/development.md)
 
 ## Origins and license

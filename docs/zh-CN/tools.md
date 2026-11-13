@@ -129,3 +129,5 @@ Go 回调不会因为进入流水线就获得操作系统隔离。文件系统�
 go test ./pkg/tools
 go test ./tests -run 'TestToolRestriction|TestPreToolDecision|TestPreDecisionFromApproval'
 ```
+
+现成的搜索和抓取工具见 [DeepSeek 网页工具](web-tools.md)。

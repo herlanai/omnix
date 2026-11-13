@@ -31,6 +31,8 @@ The example uses a local adapter and needs no API key. The [agent guide](agent.m
 | [Usage and performance](observability.md) | Adapter usage capture, cache counters, telemetry wiring, and benchmarks. |
 | [Development](development.md) | Repository layout, validation commands, regression tests, and contribution practices. |
 
+[DeepSeek web tools](web-tools.md): enable model-directed search and page fetching.
+
 ## Read alongside the code
 
 [Examples](../../examples) demonstrate integrations; [package source](../../pkg) defines public behavior; [tests](../../tests) exercise cross-package scenarios. Each guide links to the implementations it describes. Components such as compaction, approval, persistence, and telemetry need explicit host wiring; their presence in the repository does not automatically enable them in every agent.
