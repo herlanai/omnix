@@ -196,6 +196,7 @@ MCP 网络传输、完整的 Inbox steering，以及压缩和重试策略的自�
 - [会话持久化](docs/zh-CN/persistence.md)
 - [用量与性能观测](docs/zh-CN/observability.md)
 - [DeepSeek 网页搜索和抓取](docs/zh-CN/web-tools.md)
+- [方舟图片生成](docs/zh-CN/image-tools.md)
 - [开发指南](docs/zh-CN/development.md)
 
 ## 来源与许可证

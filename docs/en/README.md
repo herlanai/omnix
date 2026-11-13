@@ -33,6 +33,8 @@ The example uses a local adapter and needs no API key. The [agent guide](agent.m
 
 [DeepSeek web tools](web-tools.md): enable model-directed search and page fetching.
 
+[Ark image generation](image-tools.md): configure a separate key and let the Agent generate images.
+
 ## Read alongside the code
 
 [Examples](../../examples) demonstrate integrations; [package source](../../pkg) defines public behavior; [tests](../../tests) exercise cross-package scenarios. Each guide links to the implementations it describes. Components such as compaction, approval, persistence, and telemetry need explicit host wiring; their presence in the repository does not automatically enable them in every agent.

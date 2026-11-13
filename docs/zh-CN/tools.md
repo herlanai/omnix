@@ -131,3 +131,5 @@ go test ./tests -run 'TestToolRestriction|TestPreToolDecision|TestPreDecisionFro
 ```
 
 现成的搜索和抓取工具见 [DeepSeek 网页工具](web-tools.md)。
+
+图片生成工具见[方舟图片生成](image-tools.md)。

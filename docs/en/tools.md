@@ -131,3 +131,5 @@ go test ./tests -run 'TestToolRestriction|TestPreToolDecision|TestPreDecisionFro
 ```
 
 For ready-to-register search and fetch tools, see [DeepSeek web tools](web-tools.md).
+
+For image creation, see [Ark image generation](image-tools.md).
