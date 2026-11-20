@@ -1085,6 +1085,44 @@ func (sl *SessionLog) Append(data EventData) (uint64, error) {
 	return ev.Seq, nil
 }
 
+// AppendWithSurface appends an event carrying a surface operation, such as a
+// compaction replacement. The op is attached before state transition and
+// incremental folding so projections observe the event exactly as persisted.
+func (sl *SessionLog) AppendWithSurface(data EventData, op *SurfaceOp) (uint64, error) {
+	sl.mu.Lock()
+	defer sl.mu.Unlock()
+
+	// Clamp optional external timestamps so they never precede the last event.
+	now := time.Now()
+	if !sl.state.lastTime.IsZero() && now.Before(sl.state.lastTime) {
+		now = sl.state.lastTime
+	}
+
+	// Construct the event with its surface operation.
+	sl.seq++
+	ev := SessionEvent{
+		Seq:       sl.seq,
+		Time:      now,
+		Type:      data.EventType(),
+		Data:      data,
+		SurfaceOp: op,
+	}
+
+	// Apply the state transition and validate temporal ordering.
+	if err := sl.applyState(ev); err != nil {
+		sl.seq-- // Restore the sequence counter to preserve continuity.
+		return 0, err
+	}
+
+	sl.events = append(sl.events, ev)
+	sl.state.lastTime = now
+	// Feed the event to the enabled incremental folder without scanning history.
+	if sl.folder != nil {
+		sl.folder.Append(ev)
+	}
+	return ev.Seq, nil
+}
+
 // Check validates whole-log turn, step, and tool pairing before persistence
 // or flushing. Append already checks individual transitions; complete-log
 // balance checks are unnecessary after each append because intermediate

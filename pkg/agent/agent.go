@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/herlanai/omnix/pkg/brand"
+	"github.com/herlanai/omnix/pkg/compaction"
 	"github.com/herlanai/omnix/pkg/llm"
 	"github.com/herlanai/omnix/pkg/session"
 	"github.com/herlanai/omnix/pkg/sysprompt"
@@ -82,6 +83,8 @@ type Agent struct {
 	pendingToolRounds int
 	// toolProvider resolves tools by name; tests may inject mocks and the harness supplies production tools.
 	toolProvider func(name string) *tools.Tool
+	// compactor transparently compacts long conversations before a step (S01).
+	compactor *compaction.Compactor
 	// runCtx carries parent cancellation, deadlines, and tracing (H01); the default is Background.
 	runCtx       context.Context
 	runTimeout   time.Duration
@@ -164,6 +167,48 @@ func (a *Agent) SetToolProvider(fn func(name string) *tools.Tool) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.toolProvider = fn
+}
+
+// SetCompactor installs a transparent auto-compactor (S01). Before each step
+// the agent checks the estimated token budget; when exceeded, the oldest
+// history is summarized into a replacement event with a SurfaceOp. Source
+// events stay immutable and compaction failures degrade to no-op with an
+// agent/error record, matching the upstream compaction-engine contract.
+func (a *Agent) SetCompactor(c *compaction.Compactor) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.compactor = c
+}
+
+// maybeCompact runs one compaction pass when the log exceeds the token
+// threshold. It returns whether a replacement was appended; failures are
+// recorded but never block the turn.
+func (a *Agent) maybeCompact(ctx context.Context) bool {
+	a.mu.Lock()
+	compactor := a.compactor
+	a.mu.Unlock()
+	if compactor == nil {
+		return false
+	}
+	events := a.log.Events()
+	if !compactor.ShouldCompact(events) {
+		return false
+	}
+	res, err := compactor.Compact(ctx, events)
+	if err != nil {
+		_, _ = a.log.Append(session.AgentErrorData{Message: err.Error(), Pkg: "pkg/agent"})
+		return false
+	}
+	// Reuse the replacement's SurfaceOp; SessionLog assigns the final sequence.
+	_, err = a.log.AppendWithSurface(
+		session.AssistantMessageData{Content: res.Summary},
+		res.Replacement.SurfaceOp,
+	)
+	if err != nil {
+		_, _ = a.log.Append(session.AgentErrorData{Message: err.Error(), Pkg: "pkg/agent"})
+		return false
+	}
+	return true
 }
 
 // SetRunContext binds the parent context and an optional timeout budget (H01).
@@ -351,6 +396,9 @@ func (a *Agent) runTurn(req *turnReq) {
 	// Request the LLM in successive steps until no tools remain or an error occurs.
 	stepSeq := uint64(1)
 	for {
+		// Transparent compaction before deriving the request (codex-style).
+		a.maybeCompact(ctx)
+
 		// step/start
 		if _, err := a.log.Append(session.StepStartData{Turn: turnIdx, Step: stepSeq}); err != nil {
 			_ = a.failTurn(turnIdx, turnErr, err)
