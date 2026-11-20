@@ -12,7 +12,7 @@ import (
 	"fmt"
 	"strings"
 
-	_ "modernc.org/sqlite" // Pure-Go SQLite driver.
+	_ "github.com/liustack/sqlite" // Pure-Go SQLite driver.
 
 	"github.com/herlanai/omnix/pkg/brand"
 	"github.com/herlanai/omnix/pkg/session"

@@ -1,4 +1,4 @@
-// SQLite key-value storage using the pure-Go modernc.org/sqlite driver.
+// SQLite key-value storage using the pure-Go liustack/sqlite driver.
 package storage
 
 import (
@@ -6,7 +6,7 @@ import (
 	"database/sql"
 	"fmt"
 
-	_ "modernc.org/sqlite" // Pure-Go SQLite driver.
+	_ "github.com/liustack/sqlite" // Pure-Go SQLite driver.
 )
 
 // SQLiteKV implements Backend using kv(key TEXT PRIMARY KEY, version INTEGER, data BLOB).
