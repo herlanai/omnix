@@ -58,6 +58,9 @@ func Open(path string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
+	// SQLite serializes writers; a single pooled connection avoids
+	// "database is locked" errors under concurrent use.
+	db.SetMaxOpenConns(1)
 	if err := db.Ping(); err != nil {
 		_ = db.Close()
 		return nil, err

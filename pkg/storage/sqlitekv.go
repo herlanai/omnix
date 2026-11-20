@@ -20,6 +20,9 @@ func NewSQLiteKV(path string) (*SQLiteKV, error) {
 	if err != nil {
 		return nil, err
 	}
+	// SQLite serializes writers; a single pooled connection avoids
+	// "database is locked" errors under concurrent use.
+	db.SetMaxOpenConns(1)
 	if _, err := db.Exec(`
 		CREATE TABLE IF NOT EXISTS kv (
 			key     TEXT PRIMARY KEY,
